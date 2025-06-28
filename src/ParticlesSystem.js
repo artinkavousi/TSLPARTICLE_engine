@@ -1,6 +1,6 @@
-import { If, min, SpriteNodeMaterial, color, range, sin, instanceIndex, timerDelta, step, timerGlobal, tslFn, uniform, uv, vec3, vec4, mix, max, uint, cond, varying } from 'three/examples/jsm/nodes/Nodes.js'
-import { storage } from 'three/examples/jsm/nodes/Nodes.js'
-import StorageInstancedBufferAttribute from 'three/examples/jsm/renderers/common/StorageInstancedBufferAttribute.js'
+import { If, min, color, range, sin, instanceIndex, deltaTime, step, time, Fn, uniform, uv, vec3, vec4, mix, max, uint, select, varying, hash } from 'three/tsl'
+import { storage } from 'three/tsl'
+import { SpriteNodeMaterial, StorageInstancedBufferAttribute } from 'three/webgpu'
 import { curlNoise4d } from './tsl/curlNoise4d.js'
 import * as THREE from 'three'
 
@@ -56,15 +56,15 @@ export default class
         this.material = new SpriteNodeMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
 
         // Buffers
-        this.positionBuffer = storage(new StorageInstancedBufferAttribute(this.count, 3), 'vec3', this.count)
-        this.velocityBuffer = storage(new StorageInstancedBufferAttribute(this.count, 3), 'vec3', this.count)
-        this.lifeBuffer = storage(new StorageInstancedBufferAttribute(this.count, 1), 'float', this.count)
+        this.positionBuffer = storage(new StorageInstancedBufferAttribute(this.count, 3), 'vec3', this.count).setPBO(true)
+        this.velocityBuffer = storage(new StorageInstancedBufferAttribute(this.count, 3), 'vec3', this.count).setPBO(true)
+        this.lifeBuffer = storage(new StorageInstancedBufferAttribute(this.count, 1), 'float', this.count).setPBO(true)
 
         // Varyings
         const sparkling = varying(0)
 
         // Compute init
-        const particlesInit = tslFn(() =>
+        const particlesInit = Fn(() =>
         {
             // Position
             const position = this.positionBuffer.element(instanceIndex)
@@ -72,25 +72,25 @@ export default class
 
             // Life
             const life = this.lifeBuffer.element(instanceIndex)
-            life.assign(instanceIndex.hash())
+            life.assign(hash(instanceIndex))
         })
         this.particlesInitCompute = particlesInit().compute(this.count)
         this.renderer.compute(this.particlesInitCompute)
 
         // Compute update
-        const particlesUpdate = tslFn(() =>
+        const particlesUpdate = Fn(() =>
         {
             // Setup
             const position = this.positionBuffer.element(instanceIndex)
             const velocity = this.velocityBuffer.element(instanceIndex)
             const life = this.lifeBuffer.element(instanceIndex)
 
-            const delta = timerDelta()
-            const time = timerGlobal()
+            const delta = deltaTime
+            const currentTime = time
 
             // Turbulence
             const turbulenceInput = position.mul(this.uniforms.turbulencePositionFrequeny).add(12.34)
-            const turbulence = curlNoise4d(vec4(turbulenceInput, time.mul(this.uniforms.turbulenceTimeFrequeny))).mul(this.uniforms.turbulenceStrength)
+            const turbulence = curlNoise4d(vec4(turbulenceInput, currentTime.mul(this.uniforms.turbulenceTimeFrequeny))).mul(this.uniforms.turbulenceStrength)
 
             // Update velocity
             velocity.addAssign(turbulence)
@@ -114,12 +114,12 @@ export default class
             If(newLife.greaterThan(1), () =>
             {
                 const randomDirection = vec3(
-                    instanceIndex.add(uint(Math.random() * 0xffffff)).hash().sub(0.5),
-                    instanceIndex.add(uint(Math.random() * 0xffffff)).hash().sub(0.5),
-                    instanceIndex.add(uint(Math.random() * 0xffffff)).hash().sub(0.5)
+                    hash(instanceIndex.add(uint(Math.random() * 0xffffff))).sub(0.5),
+                    hash(instanceIndex.add(uint(Math.random() * 0xffffff))).sub(0.5),
+                    hash(instanceIndex.add(uint(Math.random() * 0xffffff))).sub(0.5)
                 ).normalize()
 
-                const mixStrength = instanceIndex.add(uint(Math.random() * 0xffffff)).hash()
+                const mixStrength = hash(instanceIndex.add(uint(Math.random() * 0xffffff)))
                 // const mixStrength = 0
 
                 // Position
@@ -144,17 +144,17 @@ export default class
         this.material.scaleNode = scaleFinal
 
         // Position
-        this.material.positionNode = tslFn(() =>
+        this.material.positionNode = Fn(() =>
         {
-            const sparklingTime = instanceIndex.add(uint(Math.random() * 0xffffff)).hash()
+            const sparklingTime = hash(instanceIndex.add(uint(Math.random() * 0xffffff)))
 
             const sparklingLife = life.mul(this.uniforms.sparklingFrequency).mod(1)
-            sparkling.assign(cond(sparklingLife.lessThan(sparklingTime).and(sparklingLife.greaterThan(sparklingTime.sub(this.uniforms.sparklingDuration.mul(this.uniforms.sparklingFrequency)))), 1, 0))
+            sparkling.assign(select(sparklingLife.lessThan(sparklingTime).and(sparklingLife.greaterThan(sparklingTime.sub(this.uniforms.sparklingDuration.mul(this.uniforms.sparklingFrequency)))), 1, 0))
             return this.positionBuffer.toAttribute()
         })()
 
         // Color
-        this.material.colorNode = tslFn(() =>
+        this.material.colorNode = Fn(() =>
         {
             const distanceToCenter = uv().sub(0.5).length()
             

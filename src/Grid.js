@@ -1,4 +1,5 @@
-import { If, MeshBasicNodeMaterial, color, tslFn, uniform, vec3, vec4, positionWorld, vec2, normalWorld, mix, max } from 'three/examples/jsm/nodes/Nodes.js'
+import { If, color, tslFn, uniform, vec3, vec4, positionWorld, vec2, normalWorld, mix, max } from 'three/tsl'
+import { MeshBasicNodeMaterial } from 'three/webgpu'
 import * as THREE from 'three'
 
 export default class Grid

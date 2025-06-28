@@ -1,10 +1,10 @@
 import GUI from 'lil-gui'
 import * as THREE from 'three'
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import WebGPURenderer from 'three/examples/jsm/renderers/webgpu/WebGPURenderer.js'
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { WebGPURenderer } from 'three/webgpu'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import { Timer } from 'three/addons/misc/Timer.js'
-import { color, rangeFog } from 'three/examples/jsm/nodes/Nodes.js'
+import { color, fog, rangeFogFactor } from 'three/tsl'
 import ParticlesSystem from './ParticlesSystem.js'
 import Grid from './Grid.js'
 
@@ -16,7 +16,7 @@ const canvas = document.querySelector('canvas.canvas')
 
 // Scene
 const scene = new THREE.Scene()
-scene.fogNode = rangeFog(color('#1b191f'), 20, 30)
+scene.fogNode = fog(color('#1b191f'), rangeFogFactor(20, 30))
 
 /**
  * Sizes
@@ -196,7 +196,7 @@ scene.add(grid.mesh)
  */
 const timer = new Timer()
 
-const tick = () =>
+const tick = async () =>
 {
     // Timer
     timer.update()
@@ -211,10 +211,13 @@ const tick = () =>
     particlesSystem.update(deltaTime)
 
     // Render
-    renderer.renderAsync(scene, camera)
+    await renderer.renderAsync(scene, camera)
 
     // Call tick again on the next frame
-    window.requestAnimationFrame(tick)
+    requestAnimationFrame(tick)
 }
 
-tick()
+// Initialize WebGPU and start the animation loop
+renderer.init().then(() => {
+    tick()
+})

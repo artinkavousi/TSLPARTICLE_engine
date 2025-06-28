@@ -1,9 +1,11 @@
 // Base on https://al-ro.github.io/projects/embers/
-import { EPSILON, cross, tslFn, vec3 } from "three/examples/jsm/nodes/Nodes.js"
+import { cross, tslFn, vec3, float } from "three/tsl"
 import { simplexNoise3d } from './simplexNoise3d.js'
 
 const curlNoise3d = tslFn(([ inputA ]) =>
 {
+    const EPSILON = float(1e-4) // In r177, EPSILON is no longer imported but created locally
+    
     // X
     const aXPos = simplexNoise3d(inputA.add(vec3(EPSILON, 0, 0)))
     const aXNeg = simplexNoise3d(inputA.sub(vec3(EPSILON, 0, 0)))
