@@ -1,0 +1,2760 @@
+Directory structure:
+└── holtsetio-breeze/
+    ├── README.md
+    ├── CREDITS.md
+    ├── index.html
+    ├── index.js
+    ├── LICENSE
+    ├── package.json
+    ├── vite.config.js
+    ├── assets/
+    │   └── venus_de_milo.glb
+    └── src/
+        ├── app.js
+        ├── bvh.js
+        ├── clothGeometry.js
+        ├── conf.js
+        ├── GroundedSkybox.js
+        ├── info.js
+        ├── leafGeometry.js
+        ├── lights.js
+        ├── petalGeometry.js
+        ├── statue.js
+        ├── common/
+        │   ├── gainmap.js
+        │   ├── noise.js
+        │   └── structuredArray.js
+        └── physics/
+            ├── springVisualizer.js
+            ├── verletGeometry.js
+            └── verletPhysics.js
+
+================================================
+FILE: README.md
+================================================
+# Breeze
+
+This is a realtime verlet-based cloth simulation, running in the browser using the three.js WebGPURenderer.
+
+See it running live [here](https://holtsetio.com/lab/breeze/)! (make sure to check out the different scenes)
+
+[![breeze](https://github.com/user-attachments/assets/87c7996f-9c07-4881-ae70-f300dd59eb9a)](https://holtsetio.com/lab/breeze/)
+
+## Credits
+
+Full list of credits for the assets can be found [here](CREDITS.md)
+
+## How to run
+```
+npm install
+npm run dev
+```
+
+
+
+================================================
+FILE: CREDITS.md
+================================================
+## Credits
+
+[Venus de Milo model](https://sketchfab.com/3d-models/venus-de-milo-903aa69c782a46619615e6df382c8045) by [chiwei](https://sketchfab.com/chiwei2333) and [Lanzi Luo](https://sketchfab.com/Thunk3D-Nancy).
+ 
+[Qwantani Noon](https://polyhaven.com/a/qwantani_noon) HDRi background by [Greg Zaal](https://gregzaal.com/) and [Jarod Guest](https://polyhaven.com/all?a=Jarod%20Guest).
+
+[Piazza Martin Lutero](https://polyhaven.com/a/piazza_martin_lutero) HDRi background by [Greg Zaal](https://gregzaal.com/) and [Rico Cilliers](https://www.artstation.com/rico_b3d).
+
+[Ninomaru Teien](https://polyhaven.com/a/ninomaru_teien) HDRi background by [Greg Zaal](https://gregzaal.com/).
+
+[Fabric texture](https://3dtextures.me/2024/06/21/fabric-lace-038/) by [3dtextures.me](https://3dtextures.me).
+
+[Cherry petal texture](https://www.vecteezy.com/png/55531046-beautiful-cherry-blossom-petal-clipart-with-soft-elegance) by [Pram Samnak](https://www.vecteezy.com/members/pram106) on [Vecteezy](https://www.vecteezy.com/).
+
+[Maple leaf texture](https://sketchfab.com/3d-models/low-poly-leaves-25c6b8f79b204be388ed4ea00f74f9a1) by [kaiinness](https://sketchfab.com/kaiinness).
+
+
+
+================================================
+FILE: index.html
+================================================
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, height=device-height, interactive-widget=resizes-content, shrink-to-fit=0, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" />
+  <meta property="og:title" content="Breeze - ThreeJS WebGPU Experiment - holtsetio.com" />
+  <meta property="og:image" content="https://holtsetio.com/img/lab/breeze.jpg" />
+  <title>Breeze - ThreeJS WebGPU Experiment - holtsetio.com</title>
+  <style>
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      position: relative;
+      overflow: hidden;
+    }
+    #container {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    #veil {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: black;
+      opacity: 1;
+      pointer-events: none;
+      transition: opacity 1s ease-in-out;
+    }
+    #progress-bar {
+      position: absolute;
+      width: 200px;
+      height: 5px;
+      left: 50vw;
+      top: 50vh;
+      transition: opacity 0.2s ease;
+      transform: translateX(-50%) translateY(-50%);
+      background-color: #333;
+    }
+    #progress {
+      position: absolute;
+      width: 0px;
+      height: 5px;
+      left: 0px;
+      top: 0px;
+      transition: width 0.2s ease;
+      background-color: #848484;
+    }
+    #error {
+      position: absolute;
+      left: 50vw;
+      top: 50vh;
+      transform: translateX(-50%) translateY(-50%);
+      color: #FFFFFF;
+      visibility: hidden;
+    }
+  </style>
+  <script defer src="https://s.holtsetio.com/script.js" data-website-id="cb36fa92-2381-4031-8f81-f430a473156d"></script>
+</head>
+<body>
+<div id="container">
+  <div id="veil">
+    <div id="progress-bar"><div id="progress"></div></div>
+    <div id="error"></div>
+  </div>
+  <script src="./index.js" type="module"></script>
+</body>
+</html>
+
+
+
+================================================
+FILE: index.js
+================================================
+import * as THREE from "three/webgpu"
+import App from "./src/app";
+THREE.ColorManagement.enabled = true
+
+const updateLoadingProgressBar = async (frac, delay=0) => {
+    return new Promise(resolve => {
+        const progress = document.getElementById("progress")
+        // 200px is the width of the progress bar defined in index.html
+        progress.style.width = `${frac * 200}px`
+        if (delay === 0) {
+            resolve();
+        } else {
+            setTimeout(resolve, delay)
+        }
+    })
+}
+
+const createRenderer = () => {
+    const renderer = new THREE.WebGPURenderer({
+        //forceWebGL: true,
+        //antialias: true,
+    });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    return renderer;
+}
+
+const error = (msg) => {
+    const progressBar = document.getElementById("progress-bar");
+    progressBar.style.opacity = 0;
+    const error = document.getElementById("error");
+    error.style.visibility = "visible";
+    error.innerText = "Error: " + msg;
+    const veil = document.getElementById("veil");
+    error.style.pointerEvents = "auto";
+};
+
+
+const run = async ()=>{
+    if (!navigator.gpu) {
+        error("Your device does not support WebGPU.");
+        return;
+    }
+
+    const renderer = createRenderer();
+    await (await renderer.init());
+
+    if (!renderer.backend.isWebGPUBackend) {
+        error("Couldn't initialize WebGPU. Make sure WebGPU is supported by your Browser!");
+        return;
+    }
+
+    const container = document.getElementById("container");
+    container.appendChild(renderer.domElement);
+
+    const app = new App(renderer);
+    await app.init(updateLoadingProgressBar);
+
+    const resize = () => {
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        app.resize(window.innerWidth, window.innerHeight);
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    const veil = document.getElementById("veil");
+    veil.style.opacity = 0;
+    const progressBar = document.getElementById("progress-bar");
+    progressBar.style.opacity = 0;
+    const clock = new THREE.Clock();
+    const animate = async ()=>{
+        const delta = clock.getDelta();
+        const elapsed = clock.getElapsedTime();
+        await app.update(delta, elapsed);
+        requestAnimationFrame(animate);
+    };
+    requestAnimationFrame(animate);
+};
+
+run().catch(error => {
+    console.error(error);
+});
+
+
+================================================
+FILE: LICENSE
+================================================
+MIT License
+
+Copyright (c) 2025 Niklas Niehus
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+
+================================================
+FILE: package.json
+================================================
+{
+  "name": "breeze",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build --mode=production",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@babel/generator": "^7.26.9",
+    "@babel/parser": "^7.26.9",
+    "@babel/traverse": "^7.26.9",
+    "@babel/types": "^7.26.9",
+    "vite": "^6.3.1",
+    "vite-plugin-plain-text": "^1.4.2",
+    "vite-plugin-tsl-operator": "^1.2.3"
+  },
+  "dependencies": {
+    "@monogrid/gainmap-js": "^3.1.0",
+    "@tweakpane/plugin-essentials": "^0.2.1",
+    "is-mobile": "^5.0.0",
+    "three": "^0.176.0",
+    "three-mesh-bvh": "^0.9.0",
+    "tweakpane": "^4.0.5",
+    "tweakpane-plugin-infodump": "^4.0.2"
+  }
+}
+
+
+
+================================================
+FILE: vite.config.js
+================================================
+import { defineConfig } from 'vite'
+import tslOperatorPlugin from 'vite-plugin-tsl-operator'
+import plainText from 'vite-plugin-plain-text';
+
+export default defineConfig({
+    base: './',
+    assetsInclude: ['**/*.hdr', '**/*.glb', '**/*.obj'],
+    server: {
+        port: 1234,
+    },
+    plugins: [
+        tslOperatorPlugin({logs:false}),
+        plainText(
+            { namedExport: false },
+        ),
+    ]
+});
+
+
+================================================
+FILE: assets/venus_de_milo.glb
+================================================
+[Binary file]
+
+
+================================================
+FILE: src/app.js
+================================================
+import * as THREE from "three/webgpu";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls"
+import {conf} from "./conf";
+import {Info} from "./info";
+import {vec3, smoothstep} from "three/tsl";
+import {VerletPhysics} from "./physics/verletPhysics.js";
+import {SpringVisualizer} from "./physics/springVisualizer.js";
+import {Statue} from "./statue.js";
+
+import ninomaru_teien_4k from "../assets/ninomaru_teien_4k.jpg";
+import piazza_martin_lutero_4k from "../assets/piazza_martin_lutero_4k.jpg";
+import qwantani_noon_4k from "../assets/qwantani_noon_4k.jpg";
+
+import {LeafGeometry} from "./leafGeometry.js";
+import {PetalGeometry} from "./petalGeometry.js";
+import {ClothGeometry} from "./clothGeometry.js";
+import {GroundedSkybox} from "./GroundedSkybox.js";
+import {Lights} from "./lights.js";
+import {loadGainmap} from "./common/gainmap.js";
+import {triNoise3Dvec} from "./common/noise.js";
+
+const sceneConfigs = {
+    cloth: {
+        hdri: qwantani_noon_4k,
+        skyboxHeight: 7.5,
+        exposure: 1.35,
+        cameraPosition: new THREE.Vector3(-13, 2.5, -11.5),
+        cameraTarget: new THREE.Vector3(0,5.3,0),
+        geometryClass: ClothGeometry,
+        instanceCount: 1,
+        cutoffPosition: 30,
+        friction: 0.25,
+        positionFunction: (isInitial = false) => { return new THREE.Vector3(-10, 5.0, -0.5 + Math.random() * 1); },
+        rotationFunction: () => { return new THREE.Quaternion() },
+        force: (position, time) => {
+            const force = vec3(0).toVar();
+            force.y.subAssign(0.000001);
+            const noise = triNoise3Dvec(position.mul(0.01), 0.2, time).sub(vec3(0.0, 0.285, 0.285));
+            const chaos = smoothstep(-0.5, 1, position.x).mul(0.0001).toVar();
+            force.addAssign(noise.mul(vec3(0.00005, chaos, chaos)).mul(5));
+
+            /*const noise2 = triNoise3Dvec(position.mul(0.2), 0.5, time).sub(vec3(0.285, 0.285, 0.285)).mul(0.0001);
+            force.addAssign(noise2);*/
+            return force;
+        },
+    },
+    sakura: {
+        hdri: ninomaru_teien_4k,
+        skyboxHeight: 10,
+        exposure: 0.85,
+        cameraPosition: new THREE.Vector3(-3.6, 4.6, -4.95),
+        cameraTarget: new THREE.Vector3(0,5.3,0),
+        geometryClass: PetalGeometry,
+        instanceCount: 10000,
+        cutoffPosition: 10,
+        friction: 0,
+        positionFunction: (isInitial = false) => { return new THREE.Vector3((isInitial ? - 2 - 12 * Math.random() : -10), 1.0 + Math.random() * 8, -2.5 + Math.random() * 5); },
+        rotationFunction: () => { return new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.random() * 2 * Math.PI, Math.random() * 2 * Math.PI, Math.random() * 2 * Math.PI)); },
+        force: (position, time) => {
+            const force = vec3(0).toVar();
+            force.y.subAssign(0.000001);
+            const noise = triNoise3Dvec(position.mul(0.01), 0.2, time).sub(vec3(0.0, 0.285, 0.285));
+            const chaos = smoothstep(-0.5, 1, position.x).mul(0.0001).toVar();
+            force.addAssign(noise.mul(vec3(0.00005, chaos, chaos)).mul(2));
+
+            const noise2 = triNoise3Dvec(position.mul(0.2), 0.5, time).sub(vec3(0.285, 0.285, 0.285)).mul(0.0001);
+            force.addAssign(noise2);
+            return force;
+        },
+    },
+    autumn: {
+        hdri: piazza_martin_lutero_4k,
+        skyboxHeight: 5,
+        exposure: 0.95,
+        cameraPosition: new THREE.Vector3(-5, 4.6, -7),
+        cameraTarget: new THREE.Vector3(0,5.3,0),
+        geometryClass: LeafGeometry,
+        instanceCount: 800,
+        cutoffPosition: 10,
+        friction: 0,
+        positionFunction: (isInitial = false) => { return new THREE.Vector3((isInitial ? -2 - 12 * Math.random() : -10), 1.0 + Math.random() * 8, -2.5 + Math.random() * 5); },
+        rotationFunction: () => { return new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.random() * 2 * Math.PI, Math.random() * 2 * Math.PI, Math.random() * 2 * Math.PI)); },
+        force: (position, time) => {
+            const force = vec3(0).toVar();
+            force.y.subAssign(0.000001);
+            const noise = triNoise3Dvec(position.mul(0.01), 0.2, time).sub(vec3(0.0, 0.285, 0.285));
+            const chaos = smoothstep(-0.5, 1, position.x).mul(0.0001).toVar();
+            force.addAssign(noise.mul(vec3(0.00005, chaos, chaos)).mul(2));
+
+            const noise2 = triNoise3Dvec(position.mul(0.2), 0.5, time).sub(vec3(0.285, 0.285, 0.285)).mul(0.0001);
+            force.addAssign(noise2);
+            return force;
+        },
+    },
+};
+
+
+class App {
+    renderer = null;
+
+    camera = null;
+
+    scene = null;
+
+    controls = null;
+
+    sceneInitialized = false;
+
+    constructor(renderer) {
+        this.renderer = renderer;
+    }
+
+    async init(progressCallback) {
+        conf.init();
+        this.info = new Info();
+
+        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+        await this.setupScene(conf.sceneName, progressCallback);
+
+        await progressCallback(1.0, 100);
+    }
+
+    async setupScene(sceneName, progressCallback = () => {}) {
+        this.sceneInitialized = false;
+
+        const sceneConfig = sceneConfigs[sceneName];
+        if (!sceneConfig) {
+            console.error("unknown scene '" + sceneName + "'");
+            return;
+        }
+
+        this.renderer.toneMappingExposure = sceneConfig.exposure;
+
+        this.camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.01, 200);
+        this.camera.position.copy(sceneConfig.cameraPosition);
+        this.camera.updateProjectionMatrix()
+
+        this.scene = new THREE.Scene();
+
+        const hdriTexture = await loadGainmap(sceneConfig.hdri);
+        hdriTexture.generateMipmaps = true;
+
+        this.scene.environment = hdriTexture;
+        this.scene.environmentRotation.set(0,Math.PI,0);
+        this.scene.environmentIntensity = 0.8;
+
+        const skybox = new GroundedSkybox( hdriTexture, sceneConfig.skyboxHeight, 100, 96 );
+        skybox.position.y = sceneConfig.skyboxHeight - 0.01;
+        skybox.rotation.y = Math.PI;
+        this.scene.add( skybox );
+
+        const lights = new Lights();
+        this.scene.add(lights.object);
+
+        this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+        this.controls.target.copy(sceneConfig.cameraTarget);
+        this.controls.enableDamping = true;
+        this.controls.autoRotate = true;
+        this.controls.maxDistance = 25;
+
+        await progressCallback(0.1)
+
+        this.statue = new Statue();
+        await this.statue.init();
+        this.scene.add(this.statue.object);
+
+        await progressCallback(0.5)
+
+        this.physics = new VerletPhysics(this.renderer);
+        this.physics.addForce(sceneConfig.force);
+        this.physics.addCollider(this.statue.bvh);
+
+        this.clothObject = new THREE.Object3D();
+        this.scene.add(this.clothObject);
+
+        this.cloths = [];
+        const clothGeometry = new sceneConfig.geometryClass(this.physics);
+        for (let i = 0; i < sceneConfig.instanceCount; i++) {
+            const cloth = clothGeometry.addInstance();
+            this.cloths.push(cloth);
+        }
+        await clothGeometry.bake();
+        this.clothObject.add(clothGeometry.object);
+
+        for (let i = 0; i < this.cloths.length; i++) {
+            const position = sceneConfig.positionFunction(true);
+            const quaternion = sceneConfig.rotationFunction();
+            await this.physics.resetObject(this.cloths[i].id, position, quaternion);
+        }
+
+        await this.physics.bake();
+
+        this.springVisualizer = new SpringVisualizer(this.physics);
+        this.scene.add(this.springVisualizer.object);
+
+        conf.friction =  sceneConfig.friction;
+        conf.gui.refresh();
+
+        this.sceneConfig = sceneConfig;
+        this.sceneName = sceneName;
+        this.sceneInitialized = true;
+    }
+
+    resize(width, height) {
+        this.camera.aspect = width / height;
+        this.camera.updateProjectionMatrix();
+    }
+    async update(delta, elapsed) {
+        if (conf.sceneName !== this.sceneName) {
+            this.sceneName = conf.sceneName;
+            this.sceneInitialized = false;
+            await this.setupScene(this.sceneName);
+        }
+        if (!this.sceneInitialized) { return; }
+        conf.begin();
+
+        this.controls.update(delta);
+
+        this.springVisualizer.object.visible = conf.wireframe;
+        this.clothObject.visible = !conf.wireframe;
+        this.controls.autoRotate = conf.rotateCamera;
+
+        if (conf.runSimulation) {
+            await this.physics.update(delta, elapsed);
+        }
+
+
+        const checksPerFrame = Math.min(100, this.physics.objects.length);
+        for (let i = 0; i < checksPerFrame; i++) {
+            const object = this.cloths[(this.physics.frameNum * checksPerFrame + i) % this.cloths.length];
+            const position = this.physics.objects[object.id].position;
+            if (position.x > this.sceneConfig.cutoffPosition) {
+                const position = this.sceneConfig.positionFunction();
+                const quaternion = this.sceneConfig.rotationFunction()
+                await this.physics.resetObject(object.id, position, quaternion)
+            }
+        }
+
+        await this.renderer.renderAsync(this.scene, this.camera);
+
+        conf.end();
+    }
+}
+export default App;
+
+
+
+================================================
+FILE: src/bvh.js
+================================================
+import {
+    add,
+    array,
+    bool,
+    clamp,
+    Continue,
+    cross,
+    dot,
+    float,
+    If,
+    int,
+    Loop,
+    max,
+    min,
+    select,
+    uint,
+    vec3,
+    vec4
+} from "three/tsl";
+import {MeshBVH} from "three-mesh-bvh";
+import {StructuredArray} from "./common/structuredArray.js";
+
+const BYTES_PER_NODE = 6 * 4 + 4 + 4;
+const TRI_INTERSECT_EPSILON = 1e-5;
+
+export class BVH {
+    geometry = null;
+    bvh = null;
+    bvhBuffer = null;
+    triangleBuffer = null;
+    maxDepth = 0;
+
+    constructor(geometry) {
+        this.geometry = geometry;
+        this.bvh = new MeshBVH(geometry);
+        this.buildBuffers();
+        this.buildShaderFunctions();
+    }
+
+    buildBuffers() {
+        const bvhNodeStruct = {
+            boundsMin: "vec3",
+            boundsMax: "vec3",
+            isLeaf: "uint",
+            count: "uint",
+            offset: "uint",
+            rightIndex: "uint",
+            splitAxis: "uint",
+        };
+        const triangleStruct = {
+            a: "vec3",
+            b: "vec3",
+            c: "vec3",
+        };
+
+        const roots = this.bvh._roots;
+        if (roots.length !== 1) {
+            throw new Error('Multi-root BVHs not supported.');
+        }
+
+        const root = roots[0];
+        const uint16Array = new Uint16Array(root);
+        const uint32Array = new Uint32Array(root);
+        const float32Array = new Float32Array(root);
+        const nodeCount = root.byteLength / BYTES_PER_NODE;
+
+        const depths = Array(nodeCount).fill(0);
+        this.bvhBuffer = new StructuredArray(bvhNodeStruct, nodeCount, "bvhBuffer");
+
+        for (let i = 0; i < nodeCount; i++) {
+            depths[i]++;
+            this.maxDepth = Math.max(depths[i], this.maxDepth);
+            const nodeIndex32 = i * BYTES_PER_NODE / 4;
+            const nodeIndex16 = nodeIndex32 * 2;
+            for (let b = 0; b < 3; b++) {
+                this.bvhBuffer.set(i, "boundsMin", float32Array.slice(nodeIndex32, nodeIndex32 + 3));
+                this.bvhBuffer.set(i, "boundsMax", float32Array.slice(nodeIndex32 + 3, nodeIndex32 + 6));
+            }
+
+            if (uint16Array[nodeIndex16 + 15] === 0xFFFF) { // IS_LEAF( nodeIndex16, uint16Array )
+                this.bvhBuffer.set(i, "isLeaf", 1);
+                this.bvhBuffer.set(i, "count", uint16Array[nodeIndex16 + 14]);
+                this.bvhBuffer.set(i, "offset", uint32Array[nodeIndex32 + 6]);
+            } else {
+                const rightIndex = 4 * uint32Array[nodeIndex32 + 6] / BYTES_PER_NODE;
+                this.bvhBuffer.set(i, "isLeaf", 0);
+                this.bvhBuffer.set(i, "splitAxis", uint32Array[nodeIndex32 + 7]);
+                this.bvhBuffer.set(i, "rightIndex", rightIndex);
+                depths[i+1] = depths[i];
+                depths[rightIndex] = depths[i];
+            }
+        }
+
+        const triangleCount = this.bvh.geometry.getIndex().count / 3
+        const indexArray = this.bvh.geometry.getIndex().array;
+        const positionArray = this.bvh.geometry.getAttribute("position").array;
+
+        this.triangleBuffer = new StructuredArray(triangleStruct, triangleCount, "triangleBuffer");
+        for (let i = 0; i < triangleCount; i++) {
+            const [aIdx, bIdx, cIdx] = indexArray.slice(i * 3, i * 3 + 3);
+            this.triangleBuffer.set(i, "a", positionArray.slice(aIdx * 3, aIdx * 3 + 3));
+            this.triangleBuffer.set(i, "b", positionArray.slice(bIdx * 3, bIdx * 3 + 3));
+            this.triangleBuffer.set(i, "c", positionArray.slice(cIdx * 3, cIdx * 3 + 3));
+        }
+
+        //console.log(this.bvhBuffer);
+        //console.log(this.triangleBuffer);
+        //console.log(this.maxDepth);
+    }
+
+    buildShaderFunctions() {
+        const intersectBVHNodeBounds = (rayOrigin, rayDirection, bvhNode) => {
+            const boundsMin = bvhNode.get("boundsMin");
+            const boundsMax = bvhNode.get("boundsMax");
+            const invDir = vec3(1).div(rayDirection).toVar("invDir");
+
+            const tMinPlane = boundsMin.sub(rayOrigin).mul(invDir).toVar("tMinPlane");
+            const tMaxPlane = boundsMax.sub(rayOrigin).mul(invDir).toVar("tMaxPlane");
+
+            const tMinHit = min(tMinPlane, tMaxPlane).toVar("tMinHit");
+            const tMaxHit = max(tMinPlane, tMaxPlane).toVar("tMaxHit");
+
+            const maxHitDistance = max(tMinHit.x, tMinHit.y, tMinHit.z, 0).toVar("boundsHitDistance");
+            const minHitDistance = min(tMaxHit.x, tMaxHit.y, tMaxHit.z);
+
+            const isHit = minHitDistance.greaterThan(maxHitDistance);
+            return [isHit, maxHitDistance];
+        }
+
+        const intersectTriangle = (rayOrigin, rayDirection, a, b, c) => {
+            const edge1 = b.sub(a).toVar("edge1");
+            const edge2 = c.sub(a).toVar("edge2");
+            const norm = cross(edge1, edge2).toVar("norm");
+            const det = dot(rayDirection, norm).negate().toVar("det");
+            const invDet = float(1).div(det).toVar("invDet");
+            const AO = rayOrigin.sub(a).toVar("AO");
+            const DAO = cross(AO, rayDirection).toVar("DAO");
+            const uvt = vec4(
+                dot(edge2, DAO).mul(invDet),
+                dot(edge1, DAO).negate().mul(invDet),
+                dot(AO, norm).mul(invDet),
+                0
+            ).toVar("uvt");
+            uvt.w.assign(float(1.0).sub(uvt.x).sub(uvt.y));
+            const distance = uvt.z.toVar("triangleDistance");
+            norm.mulAssign(det.sign());
+            //norm.assign(norm.mul(det.sign()).normalize());
+            const isHit = uvt.add(TRI_INTERSECT_EPSILON).greaterThanEqual(vec4(0)).all().and(det.greaterThan(0.0));
+            return [isHit, distance, norm];
+        };
+
+        const intersectTriangles = (rayOrigin, rayDirection, offset, count) => {
+            const end = offset.add(count).toVar("end");
+            const found = bool(false).toVar("foundTriangle");
+            const minDistance = float(1e9).toVar("minTriangleDistance");
+            const hitNormal = vec3().toVar("normal");
+            Loop({ start: offset, end: end, type: 'uint', name: 'triangleIndex', condition: '<' }, ({triangleIndex}) => {
+                const a = this.triangleBuffer.element(triangleIndex).get("a").toVar("a");
+                const b = this.triangleBuffer.element(triangleIndex).get("b").toVar("b");
+                const c = this.triangleBuffer.element(triangleIndex).get("c").toVar("c");
+                const [isHit, triangleDistance, triangleNormal] = intersectTriangle(rayOrigin, rayDirection, a, b, c);
+                If(isHit, () => {
+                    found.assign(true);
+                    If(triangleDistance.lessThanEqual(minDistance), () => {
+                        minDistance.assign(triangleDistance);
+                        hitNormal.assign(triangleNormal);
+                    });
+                });
+            });
+            return [found, minDistance, hitNormal];
+        }
+
+        this.intersect = (rayOrigin, rayDirection, maxDistance = float(1e9)) => {
+            const ptr = int(0).toVar("ptr");
+            const stack = array("uint", this.maxDepth*2).toVar("stack");
+            stack.element(0).assign(uint(0));
+
+            const minDistance = maxDistance.toVar("minDistance");
+            const found = bool(false).toVar("found");
+            const hitNormal = vec3().toVar("hitNormal");
+            Loop(ptr.greaterThan(int(-1)).and(ptr.lessThan(int(this.maxDepth*2))), () => {
+                const currNodeIndex = stack.element(ptr).toVar("currNodeIndex");
+                ptr.subAssign(int(1));
+                const bvhNode = this.bvhBuffer.element(currNodeIndex);
+                const [isHit, boundsHitDistance] = intersectBVHNodeBounds(rayOrigin, rayDirection, bvhNode);
+                If(isHit.not().or(boundsHitDistance.greaterThan(minDistance)), () => {
+                    Continue();
+                })
+
+                const isLeaf = bvhNode.get("isLeaf");
+                If(isLeaf.equal(uint(1)), () => {
+                    const offset = bvhNode.get("offset").toVar("offset");
+                    const count = bvhNode.get("count").toVar("count");
+                    const [isTriangleHit, triangleDistance, triangleNormal] = intersectTriangles(rayOrigin, rayDirection, offset, count);
+                    If(isTriangleHit, () => {
+                        If(triangleDistance.lessThanEqual(minDistance), () => {
+                            found.assign(true);
+                            minDistance.assign(triangleDistance);
+                            hitNormal.assign(triangleNormal);
+                        });
+                    });
+                }).Else(() => {
+                    const leftIndex = currNodeIndex.add(uint(1)).toVar("leftIndex");
+                    const splitAxis = bvhNode.get("splitAxis").toVar("splitAxis");
+                    const rightIndex = bvhNode.get("rightIndex").toVar("rightIndex");
+
+                    const leftToRight = rayDirection.element(splitAxis).greaterThanEqual(0);
+                    const c1 = select(leftToRight, leftIndex, rightIndex).toVar("c1");
+                    const c2 = select(leftToRight, rightIndex, leftIndex).toVar("c2");
+
+                    ptr.addAssign(1);
+                    stack.element(ptr).assign(c2);
+                    ptr.addAssign(1);
+                    stack.element(ptr).assign(c1);
+                });
+
+            });
+            If(found, () => {
+                hitNormal.assign(hitNormal.normalize());
+            });
+
+            return [found, minDistance, hitNormal];
+        }
+
+        const distanceSqToBVHNodeBoundsPoint = (point, bvhNode) => {
+            const boundsMin = bvhNode.get("boundsMin");
+            const boundsMax = bvhNode.get("boundsMax");
+            const clampedPoint = clamp(point, boundsMin, boundsMax);
+            const delta = point.sub(clampedPoint).toVar();
+            return dot(delta, delta);
+        };
+
+        const closestPointToTriangle = (point, v0, v1, v2) => {
+            const v10 = v1.sub(v0).toVar("v10");
+            const v21 = v2.sub(v1).toVar("v21");
+            const v02 = v0.sub(v2).toVar("v02");
+            const p0 = point.sub(v0).toVar("p0");
+            const p1 = point.sub(v1).toVar("p1");
+            const p2 = point.sub(v2).toVar("p2");
+            const nor = cross(v10, v02).toVar("nor");
+            const q = cross(nor, p0).toVar("q");
+            const d = float(1.0).div(dot(nor, nor)).toVar("d");
+            const u = dot(q, v02).mul(d).toVar("u");
+            const v = dot(q, v10).mul(d).toVar("v");
+            const w = float(1.0).sub(u).sub(v).toVar("w");
+            If(u.lessThan(0), () => {
+                w.assign(clamp(dot(p2, v02).div(dot(v02, v02)), 0, 1));
+                u.assign(0);
+                v.assign(w.oneMinus());
+            }).ElseIf(v.lessThan(0), () => {
+                u.assign(clamp(dot(p0, v10).div(dot(v10, v10)), 0, 1));
+                v.assign(0);
+                w.assign(u.oneMinus());
+            }).ElseIf(w.lessThan(0), () => {
+                v.assign(clamp(dot(p1, v21).div(dot(v21, v21)), 0, 1));
+                w.assign(0);
+                u.assign(v.oneMinus());
+            })
+            return [add(u.mul(v1), v.mul(v2), w.mul(v0)).toVar("closestTrianglePoint"), nor.negate()];
+        };
+
+        const distanceToTriangles = (point, offset, count) => {
+            const end = offset.add(count).toVar("end");
+            const closestTriangleDistanceSquared = float(1e9).toVar("closestTriangleDistanceSquared");
+            const outPoint = vec3().toVar("outPoint");
+            const outNormal = vec3().toVar("outNormal");
+            Loop({ start: offset, end: end, type: 'uint', name: 'triangleIndex', condition: '<' }, ({triangleIndex}) => {
+                const a = this.triangleBuffer.element(triangleIndex).get("a").toVar("a");
+                const b = this.triangleBuffer.element(triangleIndex).get("b").toVar("b");
+                const c = this.triangleBuffer.element(triangleIndex).get("c").toVar("c");
+                const [closestPoint, closestNormal] = closestPointToTriangle(point, a, b, c);
+                const delta = point.sub(closestPoint).toVar("triangleDelta");
+                const sqDist = dot(delta,delta).toVar();
+                If(sqDist.lessThan(closestTriangleDistanceSquared), () => {
+                    closestTriangleDistanceSquared.assign(sqDist);
+                    outPoint.assign(closestPoint);
+                    outNormal.assign(closestNormal);
+                });
+            });
+            return [closestTriangleDistanceSquared, outPoint, outNormal];
+        };
+
+        this.findClosestPoint = (point, maxDistanceSquared = float(1e12)) => {
+            const ptr = int(0).toVar("ptr");
+            const stack = array("uint", this.maxDepth*2).toVar("stack");
+            stack.element(0).assign(uint(0));
+
+            const closestPoint = vec3().toVar();
+            const closestNormal = vec3().toVar();
+            const closestDistanceSquared = maxDistanceSquared.toVar("closestDistanceSquared");
+            const found = bool(false).toVar("found");
+            Loop(ptr.greaterThan(int(-1)).and(ptr.lessThan(int(this.maxDepth*2))), () => {
+                const currNodeIndex = stack.element(ptr).toVar("currNodeIndex");
+                ptr.subAssign(int(1));
+                const bvhNode = this.bvhBuffer.element(currNodeIndex);
+                const boundsHitDistance = distanceSqToBVHNodeBoundsPoint(point, bvhNode);
+                If(boundsHitDistance.greaterThan(closestDistanceSquared), () => {
+                    Continue();
+                });
+
+                const isLeaf = bvhNode.get("isLeaf");
+                If(isLeaf.equal(uint(1)), () => {
+                    const offset = bvhNode.get("offset").toVar("offset");
+                    const count = bvhNode.get("count").toVar("count");
+                    const [closestTriangleDistance, closestTrianglePoint, closestTriangleNormal] = distanceToTriangles(point, offset, count);
+                    If(closestTriangleDistance.lessThanEqual(closestDistanceSquared), () => {
+                        found.assign(true);
+                        closestDistanceSquared.assign(closestTriangleDistance);
+                        closestPoint.assign(closestTrianglePoint);
+                        closestNormal.assign(closestTriangleNormal);
+                    });
+                }).Else(() => {
+                    const leftIndex = currNodeIndex.add(uint(1)).toVar("leftIndex");
+                    const splitAxis = bvhNode.get("splitAxis").toVar("splitAxis");
+                    const rightIndex = bvhNode.get("rightIndex").toVar("rightIndex");
+                    const leftNode = this.bvhBuffer.element(leftIndex);
+                    const rightNode = this.bvhBuffer.element(rightIndex);
+                    const leftDistance = distanceSqToBVHNodeBoundsPoint(point, leftNode);
+                    const rightDistance = distanceSqToBVHNodeBoundsPoint(point, rightNode);
+
+                    const leftToRight = leftDistance.lessThan(rightDistance).toVar();
+                    const c1 = select(leftToRight, leftIndex, rightIndex).toVar("c1");
+                    const c2 = select(leftToRight, rightIndex, leftIndex).toVar("c2");
+
+                    ptr.addAssign(1);
+                    stack.element(ptr).assign(c2);
+                    ptr.addAssign(1);
+                    stack.element(ptr).assign(c1);
+                });
+
+            });
+
+            return [closestPoint, closestNormal];
+        }
+
+
+
+    }
+};
+
+
+================================================
+FILE: src/clothGeometry.js
+================================================
+import * as THREE from "three/webgpu";
+import * as BufferGeometryUtils from "three/addons/utils/BufferGeometryUtils.js";
+import {BufferAttribute, Vector2} from "three/webgpu";
+import {
+    attribute,
+    cross,
+    Discard, float,
+    Fn,
+    If,
+    instanceIndex,
+    smoothstep,
+    texture,
+    transformNormalToView,
+    vec3,
+    vec4
+} from "three/tsl";
+
+import colorMapFile from "../assets/Fabric_Lace_038_basecolor.png";
+import normalMapFile from "../assets/Fabric_Lace_038_normal.png";
+import opacityMapFile from "../assets/Fabric_Lace_038_opacity.png";
+import roughnessMapFile from "../assets/Fabric_Lace_038_roughness.png";
+
+const textureLoader = new THREE.TextureLoader();
+const loadTexture = (file) => {
+    return new Promise(resolve => {
+        textureLoader.load(file, texture => {
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            resolve(texture);
+        });
+    });
+}
+
+const clothWidth = 0.05;
+const segmentSize = 0.1;
+
+export class ClothGeometry {
+    id = 0;
+    physics = null;
+    widthSegments = 0;
+    heightSegments = 0;
+
+    vertexRows = [];
+    vertices = [];
+    springs = [];
+    instances = [];
+
+    material = null;
+    object = null;
+
+    constructor(physics, widthSegments = 80, heightSegments = 80) {
+        this.physics = physics;
+        this.widthSegments = widthSegments;
+        this.heightSegments = heightSegments;
+        this.buildVerletGeometry();
+        //this.buildGeometry();
+    }
+
+    async bake() {
+        await this.createMaterial();
+        this.buildGeometry();
+    }
+
+    addInstance() {
+        const instance = this.physics.addObject();
+        const verletVertices = new Array(this.vertices.length);
+        this.vertices.forEach((vertex, index) => {
+            const { position, fixed } = vertex;
+            verletVertices[index] = this.physics.addVertex(instance.id, position, fixed);
+        });
+        this.springs.forEach((spring, index) => {
+            const vertex0 = verletVertices[spring.vertex0.id];
+            const vertex1 = verletVertices[spring.vertex1.id];
+            this.physics.addSpring(instance.id, vertex0, vertex1);
+        })
+        this.instances.push(instance);
+        return instance;
+    }
+
+    buildGeometry() {
+        const boxGeometry = new THREE.BoxGeometry(1,1,1, this.widthSegments-1, this.heightSegments-1, 2);
+        boxGeometry.clearGroups();
+        boxGeometry.deleteAttribute("uv");
+        boxGeometry.deleteAttribute("normal");
+
+        const geometry = new THREE.InstancedBufferGeometry().copy(BufferGeometryUtils.mergeVertices(boxGeometry));
+
+        const vertexCount = geometry.attributes.position.count;
+        const positionArray = geometry.attributes.position.array;
+
+        const vertexIdsArray = new Uint32Array(4 * vertexCount);
+        const sideArray = new Float32Array(3 * vertexCount);
+        const uvArray = new Float32Array(2 * vertexCount);
+
+        const uvScale = 3.0 / (this.widthSegments - 1);
+        for (let i=0; i<vertexCount; i++) {
+            const px = positionArray[i * 3 + 0];
+            const py = positionArray[i * 3 + 1];
+            const pz = positionArray[i * 3 + 2];
+
+            const xi = Math.round((px + 0.5) * (this.widthSegments - 1));
+            const yi = Math.round((py + 0.5) * (this.heightSegments - 1));
+            let uvx = xi * uvScale;
+            let uvy = yi * uvScale;
+
+            vertexIdsArray[i*4+0] =  this.vertexRows[yi][xi].id;
+            vertexIdsArray[i*4+1] =  this.vertexRows[yi][xi+1].id;
+            vertexIdsArray[i*4+2] =  this.vertexRows[yi+1][xi].id;
+            vertexIdsArray[i*4+3] =  this.vertexRows[yi+1][xi+1].id;
+            if (Math.abs(pz) < 0.001) {
+                if (Math.abs(px) - Math.abs(py) > 0.001) {
+                    sideArray[i * 3 + 0] = Math.sign(px);
+                    uvx += (clothWidth / segmentSize) * uvScale * Math.sign(px);
+                } else if (Math.abs(py) - Math.abs(px) > 0.001) {
+                    sideArray[i * 3 + 1] = Math.sign(py);
+                    uvy += (clothWidth / segmentSize) * uvScale * Math.sign(py);
+                } else {
+                    sideArray[i * 3 + 0] = Math.sign(px) / Math.sqrt(2);
+                    sideArray[i * 3 + 1] = Math.sign(py) / Math.sqrt(2);
+                }
+            } else {
+                sideArray[i * 3 + 2] = Math.sign(pz);
+            }
+            uvArray[i*2+0] = uvx;
+            uvArray[i*2+1] = uvy;
+        }
+        const vertexIdsBuffer = new BufferAttribute(vertexIdsArray, 4, false);
+        const sideBuffer = new BufferAttribute(sideArray, 3, false);
+        const uvBuffer = new BufferAttribute(uvArray, 2, false);
+        geometry.setAttribute("vertexIds", vertexIdsBuffer);
+        geometry.setAttribute("side", sideBuffer);
+        geometry.setAttribute("uv", uvBuffer);
+
+        const vertexOffsetArray = new Uint32Array(this.instances.length);
+        for (let i = 0; i < this.instances.length; i++) {
+            vertexOffsetArray[i] = this.instances[i].vertexStart;
+        }
+        const vertexOffsetBuffer = new THREE.InstancedBufferAttribute(vertexOffsetArray, 1, false);
+        geometry.setAttribute("vertexOffset", vertexOffsetBuffer);
+
+        geometry.instanceCount = this.instances.length;
+
+        this.geometry = geometry;
+        this.object = new THREE.Mesh(this.geometry, this.material);
+        this.object.frustumCulled = false;
+        this.object.castShadow = true;
+        this.object.receiveShadow = true;
+    }
+
+    addVertex(position, fixed) {
+        const id = this.vertices.length;
+        const vertex = { id, position, fixed };
+        this.vertices.push(vertex);
+        return vertex;
+    }
+
+    addSpring(vertex0, vertex1) {
+        const id = this.springs.length;
+        this.springs.push({ id, vertex0, vertex1 });
+        return id;
+    }
+
+    buildVerletGeometry() {
+        for (let y = 0; y <= this.heightSegments; y++) {
+            const row = [];
+            this.vertexRows.push(row);
+            for (let x = 0; x <= this.widthSegments; x++) {
+                const jitterx = (Math.random() * 2 - 1) * segmentSize * 0.2;
+                const jittery = (Math.random() * 2 - 1) * segmentSize * 0.2;
+                const vertexPos = new THREE.Vector3(0, (x - this.widthSegments * 0.5) * segmentSize + jitterx, (y - this.heightSegments * 0.5) * segmentSize + jittery);
+
+                const vertex = this.addVertex(vertexPos);
+                row.push(vertex);
+            }
+        }
+        for (let y = 0; y <= this.heightSegments; y++) {
+            for (let x = 0; x <= this.widthSegments; x++) {
+                const vertex = this.vertexRows[y][x];
+                if (x > 0) { this.addSpring(vertex, this.vertexRows[y][x-1]); }
+                if (y > 0) { this.addSpring(vertex, this.vertexRows[y-1][x]); }
+                if (x > 0 && y > 0) { this.addSpring(vertex, this.vertexRows[y-1][x-1]); }
+                if (y > 0 && x < this.widthSegments) { this.addSpring(vertex, this.vertexRows[y-1][x+1]); }
+                if (x > 1) { this.addSpring(vertex, this.vertexRows[y][x-2]); }
+                if (y > 1) { this.addSpring(vertex, this.vertexRows[y-2][x]); }
+                if (x > 1 && y > 1) { this.addSpring(vertex, this.vertexRows[y-2][x-2]); }
+                if (y > 1 && x < this.widthSegments - 1) { this.addSpring(vertex, this.vertexRows[y-2][x+2]); }
+
+                /*for (let i = 3; i<=7; i *= 2) {
+                    if (x > i-1) {
+                        this.addSpring(vertex, this.vertexRows[y][x - i]);
+                    }
+                    if (y > i-1) {
+                        this.addSpring(vertex, this.vertexRows[y - i][x]);
+                    }
+                }*/
+
+                //if (x > 1 && y > 1) { this.addSpring(vertex, this.vertexRows[y-2][x-2]); }
+                //if (y > 1 && x < this.widthSegments - 1) { this.addSpring(vertex, this.vertexRows[y-2][x+2]); }
+
+                //if (x > 2 && y > 2) { this.addSpring(vertex, this.vertexRows[y-3][x-3]); }
+                //if (y > 2 && x < this.widthSegments - 2) { this.addSpring(vertex, this.vertexRows[y-3][x+3]); }
+            }
+        }
+    }
+
+    async createMaterial() {
+        const files = [colorMapFile, normalMapFile, roughnessMapFile, opacityMapFile];
+        const [ colorMap, normalMap, roughnessMap, alphaMap] = await Promise.all(files.map(loadTexture));
+
+        const material = new THREE.MeshPhysicalNodeMaterial({
+            transparent: true,
+            map: colorMap,
+            normalMap,
+            roughnessMap,
+            //alphaMap,
+            sheen: 1.0,
+            sheenColor: "#FF0000",
+            sheenRoughness: 0,
+            color: "#ff8888",
+            normalScale: new Vector2(0.5,-0.5),
+        });
+
+        const vNormal = vec3().toVarying("v_normalView");
+        const vOpacity = float(0).toVarying("vOpacity");
+        material.positionNode = Fn( ( { } ) => {
+            const side = attribute( 'side' );
+            const vertexIds = attribute( 'vertexIds' );
+            const vertexOffset = attribute( 'vertexOffset' );
+            const v0 = this.physics.vertexBuffer.element( vertexIds.x.add(vertexOffset) ).get("smoothedPosition").toVar();
+            const v1 = this.physics.vertexBuffer.element( vertexIds.y.add(vertexOffset) ).get("smoothedPosition").toVar();
+            const v2 = this.physics.vertexBuffer.element( vertexIds.z.add(vertexOffset) ).get("smoothedPosition").toVar();
+            const v3 = this.physics.vertexBuffer.element( vertexIds.w.add(vertexOffset) ).get("smoothedPosition").toVar();
+
+            const top = v0.add( v1 );
+            const right = v1.add( v3 );
+            const bottom = v2.add( v3 );
+            const left = v0.add( v2 );
+
+            const tangent = right.sub( left ).normalize().toVar();
+            const bitangent = bottom.sub( top ).normalize().toVar();
+            const n = cross( tangent, bitangent );
+
+            const normal = tangent.mul(side.x).add(bitangent.mul(side.y)).add(n.mul(side.z)).normalize().toVar();
+            vNormal.assign(transformNormalToView(normal));
+
+            const position = v0.add( v1 ).add( v2 ).add( v3 ).mul( 0.25 ).add(normal.mul(clothWidth)).toVar();
+            vOpacity.assign(smoothstep(20, 24, position.x).oneMinus());
+            vOpacity.mulAssign(smoothstep(-10, -8, position.x));
+
+            return position;
+        } )();
+
+        material.opacityNode = Fn(() => {
+            return texture(alphaMap).r.mul(0.25).add(0.75).mul(vOpacity);
+        })();
+
+        this.material = material;
+
+    }
+}
+
+
+================================================
+FILE: src/conf.js
+================================================
+import {Pane} from 'tweakpane';
+import * as EssentialsPlugin from '@tweakpane/plugin-essentials';
+import mobile from "is-mobile";
+
+class Conf {
+    gui = null;
+
+    runSimulation = true;
+
+    wireframe = false;
+
+    rotateCamera = false;
+
+    stiffness = 0.25;
+
+    friction = 0.5;
+
+    sceneName = "cloth";
+
+    constructor() {
+        if (mobile()) {
+        }
+        this.updateParams();
+
+    }
+
+    updateParams() {
+
+    }
+
+    init() {
+        const gui = new Pane()
+        gui.registerPlugin(EssentialsPlugin);
+
+        const stats = gui.addFolder({
+            title: "stats",
+            expanded: false,
+        });
+        this.fpsGraph = stats.addBlade({
+            view: 'fpsgraph',
+            label: 'fps',
+            rows: 2,
+        });
+
+        this.settings = gui.addFolder({
+            title: "settings",
+            expanded: false,
+        });
+
+        this.sceneFolder = gui.addFolder({
+            title: "scene",
+            expanded: true,
+        });
+
+        this.sceneFolder.addBlade({
+            view: 'list',
+            //label: 'scene',
+            options: [
+                {text: 'prairie cloth', value: "cloth"},
+                {text: 'autumn leaves', value: "autumn"},
+                {text: 'sakura petals' , value: "sakura"},
+            ],
+            value: this.sceneName,
+        }).on('change', (ev) => {
+            this.sceneName = ev.value;
+        });
+
+        this.settings.addBinding(this, "rotateCamera");
+        this.settings.addBinding(this, "runSimulation");
+        this.settings.addBinding(this, "wireframe");
+
+        this.settings.addBinding( this, 'stiffness', { min: 0.1, max: 0.5, step: 0.01 });
+        this.settings.addBinding( this, 'friction', { min: 0.0, max: 1.0, step: 0.01 });
+
+        this.gui = gui;
+    }
+
+    update() {
+    }
+
+    begin() {
+        this.fpsGraph.begin();
+    }
+    end() {
+        this.fpsGraph.end();
+    }
+}
+export const conf = new Conf();
+
+
+================================================
+FILE: src/GroundedSkybox.js
+================================================
+import { Mesh, MeshBasicNodeMaterial, MeshStandardNodeMaterial, SphereGeometry, Vector3 } from 'three/webgpu';
+import { Fn, texture, shadow, lights, vec3, uv, uniform } from 'three/tsl';
+import {conf} from "./conf.js";
+
+/**
+ * A ground-projected skybox.
+ *
+ * By default the object is centered at the camera, so it is often helpful to set
+ * `skybox.position.y = height` to put the ground at the origin.
+ *
+ * ```js
+ * const height = 15, radius = 100;
+ *
+ * const skybox = new GroundedSkybox( envMap, height, radius );
+ * skybox.position.y = height;
+ * scene.add( skybox );
+ * ```
+ *
+ * @augments Mesh
+ * @three_import import { GroundedSkybox } from 'three/addons/objects/GroundedSkybox.js';
+ */
+export class GroundedSkybox extends Mesh {
+
+    /**
+     * Constructs a new ground-projected skybox.
+     *
+     * @param {Texture} map - The environment map to use.
+     * @param {number} height - The height is how far the camera that took the photo was above the ground.
+     * A larger value will magnify the downward part of the image.
+     * @param {number} radius - The radius of the skybox. Must be large enough to ensure the scene's camera stays inside.
+     * @param {number} [resolution=128] - The geometry resolution of the skybox.
+     */
+    constructor( map, height, radius, resolution = 128 ) {
+
+        if ( height <= 0 || radius <= 0 || resolution <= 0 ) {
+
+            throw new Error( 'GroundedSkybox height, radius, and resolution must be positive.' );
+
+        }
+
+        const geometry = new SphereGeometry( radius, 2 * resolution, resolution );
+        geometry.scale( 1, 1, - 1 );
+
+        const pos = geometry.getAttribute( 'position' );
+        const tmp = new Vector3();
+
+        for ( let i = 0; i < pos.count; ++ i ) {
+
+            tmp.fromBufferAttribute( pos, i );
+            if ( tmp.y < 0 ) {
+
+                // Smooth out the transition from flat floor to sphere:
+                const y1 = - height * 3 / 2;
+                const f =
+                    tmp.y < y1 ? - height / tmp.y : ( 1 - tmp.y * tmp.y / ( 3 * y1 * y1 ) );
+                tmp.multiplyScalar( f );
+                tmp.toArray( pos.array, 3 * i );
+
+            }
+
+        }
+
+        pos.needsUpdate = true;
+
+        const material = new MeshBasicNodeMaterial({map});
+
+        super( geometry, material );
+
+    }
+
+}
+
+
+================================================
+FILE: src/info.js
+================================================
+import {Pane} from 'tweakpane';
+import * as InfodumpPlugin from 'tweakpane-plugin-infodump';
+
+export class Info {
+    constructor() {
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        container.style.position = 'absolute';
+        container.style.left = '8px';
+        container.style.bottom = '8px';
+        container.style.maxWidth = '512px';
+        container.style.width = 'calc(100% - 16px)';
+
+        const pane = new Pane({ container })
+        pane.registerPlugin(InfodumpPlugin);
+        this.pane = pane;
+
+        const info = pane.addFolder({
+            title: "info",
+            expanded: false,
+        });
+        this.textBlade = info.addBlade({
+            view: "infodump",
+            content: "Realtime verlet-based cloth simulation in the Browser, using WebGPU and written in [ThreeJS](https://threejs.org) TSL.\n\n" +
+                "View the source code [here](https://github.com/holtsetio/breeze/).\n\n" +
+                "[> Other experiments](https://holtsetio.com)",
+            markdown: true,
+        })
+
+        const credits = info.addFolder({
+            title: "credits",
+            expanded: false,
+        });
+        credits.element.style.marginLeft = '0px';
+        credits.addBlade({
+            view: "infodump",
+            content: "[Venus de Milo model](https://sketchfab.com/3d-models/venus-de-milo-903aa69c782a46619615e6df382c8045) by [chiwei](https://sketchfab.com/chiwei2333) and [Lanzi Luo](https://sketchfab.com/Thunk3D-Nancy).\n\n" +
+                "[Qwantani Noon](https://polyhaven.com/a/qwantani_noon) HDRi background by [Greg Zaal](https://gregzaal.com/) and [Jarod Guest](https://polyhaven.com/all?a=Jarod%20Guest).\n\n" +
+                "[Piazza Martin Lutero](https://polyhaven.com/a/piazza_martin_lutero) HDRi background by [Greg Zaal](https://gregzaal.com/) and [Rico Cilliers](https://www.artstation.com/rico_b3d).\n\n" +
+                "[Ninomaru Teien](https://polyhaven.com/a/ninomaru_teien) HDRi background by [Greg Zaal](https://gregzaal.com/).\n\n" +
+                "[Fabric texture](https://3dtextures.me/2024/06/21/fabric-lace-038/) by [3dtextures.me](https://3dtextures.me).\n\n" +
+                "[Cherry petal texture](https://www.vecteezy.com/png/55531046-beautiful-cherry-blossom-petal-clipart-with-soft-elegance) by [Pram Samnak](https://www.vecteezy.com/members/pram106) on [Vecteezy](https://www.vecteezy.com/).\n\n" +
+                "[Maple leaf texture](https://sketchfab.com/3d-models/low-poly-leaves-25c6b8f79b204be388ed4ea00f74f9a1) by [kaiinness](https://sketchfab.com/kaiinness).\n\n",
+            markdown: true,
+        });
+
+    }
+    setText(c) {
+        this.textBlade.controller.view.element.innerHTML = '<div class="tp-induv_t"><p>' + c + '</p></div>';
+        this.pane.refresh();
+    }
+}
+
+
+================================================
+FILE: src/leafGeometry.js
+================================================
+import * as THREE from "three/webgpu";
+import * as BufferGeometryUtils from "three/addons/utils/BufferGeometryUtils.js";
+import {BufferAttribute, Vector2} from "three/webgpu";
+import {
+    attribute,
+    cross,
+    Discard,
+    float,
+    Fn,
+    If,
+    instanceIndex, smoothstep,
+    texture,
+    transformNormalToView,
+    vec3,
+    vec4
+} from "three/tsl";
+
+import mapFile from "../assets/mapleleaf.png";
+
+const textureLoader = new THREE.TextureLoader();
+const loadTexture = (file) => {
+    return new Promise(resolve => {
+        textureLoader.load(file, texture => {
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            resolve(texture);
+        });
+    });
+}
+
+const clothWidth = 0.0;
+const segmentSize = 0.05;
+
+export class LeafGeometry {
+    id = 0;
+    physics = null;
+    widthSegments = 0;
+    heightSegments = 0;
+
+    vertexRows = [];
+    vertices = [];
+    springs = [];
+    instances = [];
+
+    material = null;
+    object = null;
+
+    constructor(physics, widthSegments = 10, heightSegments = 10) {
+        //PetalGeometry.objects.push(this);
+        this.physics = physics;
+        this.widthSegments = widthSegments;
+        this.heightSegments = heightSegments;
+        this.buildVerletGeometry();
+        //this.buildGeometry();
+    }
+
+    async bake() {
+        await this.createMaterial();
+        this.buildGeometry();
+    }
+
+    addInstance() {
+        const instance = this.physics.addObject();
+        const verletVertices = new Array(this.vertices.length);
+        this.vertices.forEach((vertex, index) => {
+            const { position, fixed } = vertex;
+            verletVertices[index] = this.physics.addVertex(instance.id, position, fixed);
+        });
+        this.springs.forEach((spring, index) => {
+            const vertex0 = verletVertices[spring.vertex0.id];
+            const vertex1 = verletVertices[spring.vertex1.id];
+            this.physics.addSpring(instance.id, vertex0, vertex1);
+        })
+        this.instances.push(instance);
+        return instance;
+    }
+
+    buildGeometry() {
+        const planeGeometry0 = new THREE.PlaneGeometry(1,1,this.widthSegments-1, this.heightSegments-1);
+        planeGeometry0.deleteAttribute("uv");
+        planeGeometry0.deleteAttribute("normal");
+        planeGeometry0.applyMatrix4(new THREE.Matrix4().makeTranslation(0,0,1));
+        const planeGeometry1 = new THREE.PlaneGeometry(1,1,this.widthSegments-1, this.heightSegments-1);
+        planeGeometry1.applyQuaternion(new THREE.Quaternion().setFromEuler(new THREE.Euler(0,Math.PI,0)));
+        planeGeometry1.applyMatrix4(new THREE.Matrix4().makeTranslation(0,0,-1));
+        planeGeometry1.deleteAttribute("uv");
+        planeGeometry1.deleteAttribute("normal");
+        const mergedPlane = BufferGeometryUtils.mergeGeometries([planeGeometry0, planeGeometry1]);
+        const geometry = new THREE.InstancedBufferGeometry().copy(BufferGeometryUtils.mergeVertices(mergedPlane));
+
+        const vertexCount = geometry.attributes.position.count;
+        const positionArray = geometry.attributes.position.array;
+
+        const vertexIdsArray = new Uint32Array(4 * vertexCount);
+        const sideArray = new Float32Array(3 * vertexCount);
+        const uvArray = new Float32Array(2 * vertexCount);
+
+        const uvScale = 1.0 / (this.widthSegments - 1);
+        for (let i=0; i<vertexCount; i++) {
+            const px = positionArray[i * 3 + 0];
+            const py = positionArray[i * 3 + 1];
+            const pz = positionArray[i * 3 + 2];
+
+            const xi = Math.round((px + 0.5) * (this.widthSegments - 1));
+            const yi = Math.round((py + 0.5) * (this.heightSegments - 1));
+            let uvx = xi * uvScale;
+            let uvy = yi * uvScale;
+
+            vertexIdsArray[i*4+0] =  this.vertexRows[yi][xi].id;
+            vertexIdsArray[i*4+1] =  this.vertexRows[yi][xi+1].id;
+            vertexIdsArray[i*4+2] =  this.vertexRows[yi+1][xi].id;
+            vertexIdsArray[i*4+3] =  this.vertexRows[yi+1][xi+1].id;
+            if (Math.abs(pz) < 0.001) {
+                if (Math.abs(px) - Math.abs(py) > 0.001) {
+                    sideArray[i * 3 + 0] = Math.sign(px);
+                    uvx += (clothWidth / segmentSize) * uvScale * Math.sign(px);
+                } else if (Math.abs(py) - Math.abs(px) > 0.001) {
+                    sideArray[i * 3 + 1] = Math.sign(py);
+                    uvy += (clothWidth / segmentSize) * uvScale * Math.sign(py);
+                } else {
+                    sideArray[i * 3 + 0] = Math.sign(px) / Math.sqrt(2);
+                    sideArray[i * 3 + 1] = Math.sign(py) / Math.sqrt(2);
+                }
+            } else {
+                sideArray[i * 3 + 2] = Math.sign(pz);
+            }
+            uvArray[i*2+0] = uvx;
+            uvArray[i*2+1] = uvy;
+        }
+        const vertexIdsBuffer = new BufferAttribute(vertexIdsArray, 4, false);
+        const sideBuffer = new BufferAttribute(sideArray, 3, false);
+        const uvBuffer = new BufferAttribute(uvArray, 2, false);
+        geometry.setAttribute("vertexIds", vertexIdsBuffer);
+        geometry.setAttribute("side", sideBuffer);
+        geometry.setAttribute("uv", uvBuffer);
+
+        const vertexOffsetArray = new Uint32Array(this.instances.length);
+        for (let i = 0; i < this.instances.length; i++) {
+            vertexOffsetArray[i] = this.instances[i].vertexStart;
+        }
+        const vertexOffsetBuffer = new THREE.InstancedBufferAttribute(vertexOffsetArray, 1, false);
+        geometry.setAttribute("vertexOffset", vertexOffsetBuffer);
+
+        geometry.instanceCount = this.instances.length;
+
+        this.geometry = geometry;
+        this.object = new THREE.Mesh(this.geometry, this.material);
+        this.object.frustumCulled = false;
+        this.object.castShadow = true;
+        this.object.receiveShadow = true;
+    }
+
+    addVertex(position, fixed) {
+        const id = this.vertices.length;
+        const vertex = { id, position, fixed };
+        this.vertices.push(vertex);
+        return vertex;
+    }
+
+    addSpring(vertex0, vertex1) {
+        const id = this.springs.length;
+        this.springs.push({ id, vertex0, vertex1 });
+        return id;
+    }
+
+    buildVerletGeometry() {
+        for (let y = 0; y <= this.heightSegments; y++) {
+            const row = [];
+            this.vertexRows.push(row);
+            for (let x = 0; x <= this.widthSegments; x++) {
+                const jitterx = (Math.random() * 2 - 1) * segmentSize * 0.2;
+                const jittery = (Math.random() * 2 - 1) * segmentSize * 0.2;
+                const vertexPos = new THREE.Vector3(0, (x - this.widthSegments * 0.5) * segmentSize + jitterx, (y - this.heightSegments * 0.5) * segmentSize + jittery);
+
+                const vertex = this.addVertex(vertexPos);
+                row.push(vertex);
+            }
+        }
+        for (let y = 0; y <= this.heightSegments; y++) {
+            for (let x = 0; x <= this.widthSegments; x++) {
+                const vertex = this.vertexRows[y][x];
+                if (x > 0) { this.addSpring(vertex, this.vertexRows[y][x-1]); }
+                if (y > 0) { this.addSpring(vertex, this.vertexRows[y-1][x]); }
+                if (x > 0 && y > 0) { this.addSpring(vertex, this.vertexRows[y-1][x-1]); }
+                if (y > 0 && x < this.widthSegments) { this.addSpring(vertex, this.vertexRows[y-1][x+1]); }
+                if (x > 1) { this.addSpring(vertex, this.vertexRows[y][x-2]); }
+                if (y > 1) { this.addSpring(vertex, this.vertexRows[y-2][x]); }
+
+                /*for (let i = 3; i<=7; i *= 2) {
+                    if (x > i-1) {
+                        this.addSpring(vertex, this.vertexRows[y][x - i]);
+                    }
+                    if (y > i-1) {
+                        this.addSpring(vertex, this.vertexRows[y - i][x]);
+                    }
+                }*/
+
+                //if (x > 1 && y > 1) { this.addSpring(vertex, this.vertexRows[y-2][x-2]); }
+                //if (y > 1 && x < this.widthSegments - 1) { this.addSpring(vertex, this.vertexRows[y-2][x+2]); }
+
+                //if (x > 2 && y > 2) { this.addSpring(vertex, this.vertexRows[y-3][x-3]); }
+                //if (y > 2 && x < this.widthSegments - 2) { this.addSpring(vertex, this.vertexRows[y-3][x+3]); }
+            }
+        }
+    }
+
+    async createMaterial() {
+        const map = await loadTexture(mapFile);
+        map.wrapS = THREE.ClampToEdgeWrapping;
+        map.wrapT = THREE.ClampToEdgeWrapping;
+
+        const material = new THREE.MeshPhysicalNodeMaterial({
+            transparent: true, roughness: 0.8,
+            //map,
+            //alphaMap: map,
+        });
+        material.colorNode = Fn(() => {
+            const color = texture(map);
+            If(color.a.lessThan(0.9), () => {
+                Discard();
+            });
+            return color.mul(vec4(vec3(0.7), 1));
+        })();
+        material.castShadowNode = Fn(() => {
+            const color = texture(map);
+            If(color.a.lessThan(0.9), () => {
+                Discard();
+            });
+            return texture(map).a.oneMinus();
+        })();
+        //material.opacityNode = texture(alphaMap).r.mul(0.25).add(0.75);
+
+        const vNormal = vec3().toVarying("vNormal");
+        const vOpacity = float(0).toVarying("vOpacity");
+        material.positionNode = Fn( ( { } ) => {
+            const side = attribute( 'side' );
+            const vertexIds = attribute( 'vertexIds' );
+            const vertexOffset = attribute( 'vertexOffset' );
+            const v0 = this.physics.vertexBuffer.element( vertexIds.x.add(vertexOffset) ).get("smoothedPosition").toVar();
+            const v1 = this.physics.vertexBuffer.element( vertexIds.y.add(vertexOffset) ).get("smoothedPosition").toVar();
+            const v2 = this.physics.vertexBuffer.element( vertexIds.z.add(vertexOffset) ).get("smoothedPosition").toVar();
+            const v3 = this.physics.vertexBuffer.element( vertexIds.w.add(vertexOffset) ).get("smoothedPosition").toVar();
+
+            const top = v0.add( v1 );
+            const right = v1.add( v3 );
+            const bottom = v2.add( v3 );
+            const left = v0.add( v2 );
+
+            const tangent = right.sub( left ).normalize().toVar();
+            const bitangent = bottom.sub( top ).normalize().toVar();
+            const n = cross( tangent, bitangent );
+
+            const normal = tangent.mul(side.x).add(bitangent.mul(side.y)).add(n.mul(side.z)).normalize().toVar();
+            vNormal.assign(transformNormalToView(normal));
+
+            const position = v0.add( v1 ).add( v2 ).add( v3 ).mul( 0.25 ).add(normal.mul(clothWidth)).toVar();
+            vOpacity.assign(smoothstep(8, 10, position.x).oneMinus());
+            vOpacity.mulAssign(smoothstep(-10, -8, position.x));
+
+            return position;
+        } )();
+        material.normalNode = vNormal.normalize();
+        material.opacityNode = vOpacity;
+
+        this.material = material;
+
+    }
+
+}
+
+
+================================================
+FILE: src/lights.js
+================================================
+import * as THREE from "three/webgpu";
+
+export class Lights {
+    lights = [];
+
+    constructor() {
+        this.object = new THREE.Object3D();
+        const light = new THREE.SpotLight(0xffffff, 5, 150, Math.PI * 0.02, 1, 0);
+        const lightTarget = new THREE.Object3D();
+        light.position.set(-54., 35, -40);
+        lightTarget.position.set(0,4,0);
+        light.target = lightTarget;
+
+        this.object.add(light);
+        this.object.add(lightTarget);
+        //this.object.add(new THREE.SpotLightHelper(light, 0));
+
+        light.castShadow = true; // default false
+        light.shadow.mapSize.width = 512*4; // default
+        light.shadow.mapSize.height = 512*4; // default
+        light.shadow.bias = -0.000001;
+        light.shadow.camera.near = 0.5; // default
+        light.shadow.camera.far = 150;
+
+        this.light = light;
+
+    }
+
+    update(elapsed) {
+
+    }
+}
+
+
+================================================
+FILE: src/petalGeometry.js
+================================================
+import * as THREE from "three/webgpu";
+import * as BufferGeometryUtils from "three/addons/utils/BufferGeometryUtils.js";
+import {BufferAttribute, Vector2} from "three/webgpu";
+import {
+    attribute,
+    cross,
+    Discard,
+    float,
+    Fn,
+    If,
+    instanceIndex, smoothstep,
+    texture,
+    transformNormalToView,
+    vec3,
+    vec4
+} from "three/tsl";
+
+import mapFile from "../assets/sakuraPetal.png";
+
+const textureLoader = new THREE.TextureLoader();
+const loadTexture = (file) => {
+    return new Promise(resolve => {
+        textureLoader.load(file, texture => {
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            resolve(texture);
+        });
+    });
+}
+
+const clothWidth = 0.0;
+const segmentSize = 0.04;
+
+export class PetalGeometry {
+    id = 0;
+    physics = null;
+    widthSegments = 0;
+    heightSegments = 0;
+
+    vertexRows = [];
+    vertices = [];
+    springs = [];
+    instances = [];
+
+    material = null;
+    object = null;
+
+    constructor(physics, widthSegments = 4, heightSegments = 4) {
+        //PetalGeometry.objects.push(this);
+        this.physics = physics;
+        this.widthSegments = widthSegments;
+        this.heightSegments = heightSegments;
+        this.buildVerletGeometry();
+        //this.buildGeometry();
+    }
+
+    async bake() {
+        await this.createMaterial();
+        this.buildGeometry();
+    }
+
+    addInstance() {
+        const instance = this.physics.addObject();
+        const verletVertices = new Array(this.vertices.length);
+        this.vertices.forEach((vertex, index) => {
+            const { position, fixed } = vertex;
+            verletVertices[index] = this.physics.addVertex(instance.id, position, fixed);
+        });
+        this.springs.forEach((spring, index) => {
+            const vertex0 = verletVertices[spring.vertex0.id];
+            const vertex1 = verletVertices[spring.vertex1.id];
+            this.physics.addSpring(instance.id, vertex0, vertex1);
+        })
+        this.instances.push(instance);
+        return instance;
+    }
+
+    buildGeometry() {
+        const planeGeometry0 = new THREE.PlaneGeometry(1,1,this.widthSegments-1, this.heightSegments-1);
+        planeGeometry0.deleteAttribute("uv");
+        planeGeometry0.deleteAttribute("normal");
+        planeGeometry0.applyMatrix4(new THREE.Matrix4().makeTranslation(0,0,1));
+        const planeGeometry1 = new THREE.PlaneGeometry(1,1,this.widthSegments-1, this.heightSegments-1);
+        planeGeometry1.applyQuaternion(new THREE.Quaternion().setFromEuler(new THREE.Euler(0,Math.PI,0)));
+        planeGeometry1.applyMatrix4(new THREE.Matrix4().makeTranslation(0,0,-1));
+        planeGeometry1.deleteAttribute("uv");
+        planeGeometry1.deleteAttribute("normal");
+        const mergedPlane = BufferGeometryUtils.mergeGeometries([planeGeometry0, planeGeometry1]);
+        const geometry = new THREE.InstancedBufferGeometry().copy(BufferGeometryUtils.mergeVertices(mergedPlane));
+
+        const vertexCount = geometry.attributes.position.count;
+        const positionArray = geometry.attributes.position.array;
+
+        const vertexIdsArray = new Uint32Array(4 * vertexCount);
+        const sideArray = new Float32Array(3 * vertexCount);
+        const uvArray = new Float32Array(2 * vertexCount);
+
+        const uvScale = 1.0 / (this.widthSegments - 1);
+        for (let i=0; i<vertexCount; i++) {
+            const px = positionArray[i * 3 + 0];
+            const py = positionArray[i * 3 + 1];
+            const pz = positionArray[i * 3 + 2];
+
+            const xi = Math.round((px + 0.5) * (this.widthSegments - 1));
+            const yi = Math.round((py + 0.5) * (this.heightSegments - 1));
+            let uvx = xi * uvScale;
+            let uvy = yi * uvScale;
+
+            vertexIdsArray[i*4+0] =  this.vertexRows[yi][xi].id;
+            vertexIdsArray[i*4+1] =  this.vertexRows[yi][xi+1].id;
+            vertexIdsArray[i*4+2] =  this.vertexRows[yi+1][xi].id;
+            vertexIdsArray[i*4+3] =  this.vertexRows[yi+1][xi+1].id;
+            if (Math.abs(pz) < 0.001) {
+                if (Math.abs(px) - Math.abs(py) > 0.001) {
+                    sideArray[i * 3 + 0] = Math.sign(px);
+                    uvx += (clothWidth / segmentSize) * uvScale * Math.sign(px);
+                } else if (Math.abs(py) - Math.abs(px) > 0.001) {
+                    sideArray[i * 3 + 1] = Math.sign(py);
+                    uvy += (clothWidth / segmentSize) * uvScale * Math.sign(py);
+                } else {
+                    sideArray[i * 3 + 0] = Math.sign(px) / Math.sqrt(2);
+                    sideArray[i * 3 + 1] = Math.sign(py) / Math.sqrt(2);
+                }
+            } else {
+                sideArray[i * 3 + 2] = Math.sign(pz);
+            }
+            uvArray[i*2+0] = uvx;
+            uvArray[i*2+1] = uvy;
+        }
+        const vertexIdsBuffer = new BufferAttribute(vertexIdsArray, 4, false);
+        const sideBuffer = new BufferAttribute(sideArray, 3, false);
+        const uvBuffer = new BufferAttribute(uvArray, 2, false);
+        geometry.setAttribute("vertexIds", vertexIdsBuffer);
+        geometry.setAttribute("side", sideBuffer);
+        geometry.setAttribute("uv", uvBuffer);
+
+        const vertexOffsetArray = new Uint32Array(this.instances.length);
+        for (let i = 0; i < this.instances.length; i++) {
+            vertexOffsetArray[i] = this.instances[i].vertexStart;
+        }
+        const vertexOffsetBuffer = new THREE.InstancedBufferAttribute(vertexOffsetArray, 1, false);
+        geometry.setAttribute("vertexOffset", vertexOffsetBuffer);
+
+        geometry.instanceCount = this.instances.length;
+
+        this.geometry = geometry;
+        this.object = new THREE.Mesh(this.geometry, this.material);
+        this.object.frustumCulled = false;
+        this.object.castShadow = true;
+        this.object.receiveShadow = true;
+    }
+
+    addVertex(position, fixed) {
+        const id = this.vertices.length;
+        const vertex = { id, position, fixed };
+        this.vertices.push(vertex);
+        return vertex;
+    }
+
+    addSpring(vertex0, vertex1) {
+        const id = this.springs.length;
+        this.springs.push({ id, vertex0, vertex1 });
+        return id;
+    }
+
+    buildVerletGeometry() {
+        for (let y = 0; y <= this.heightSegments; y++) {
+            const row = [];
+            this.vertexRows.push(row);
+            for (let x = 0; x <= this.widthSegments; x++) {
+                const jitterx = (Math.random() * 2 - 1) * segmentSize * 0.2;
+                const jittery = (Math.random() * 2 - 1) * segmentSize * 0.2;
+                const vertexPos = new THREE.Vector3(0, (x - this.widthSegments * 0.5) * segmentSize + jitterx, (y - this.heightSegments * 0.5) * segmentSize + jittery);
+
+                const vertex = this.addVertex(vertexPos);
+                row.push(vertex);
+            }
+        }
+        for (let y = 0; y <= this.heightSegments; y++) {
+            for (let x = 0; x <= this.widthSegments; x++) {
+                const vertex = this.vertexRows[y][x];
+                if (x > 0) { this.addSpring(vertex, this.vertexRows[y][x-1]); }
+                if (y > 0) { this.addSpring(vertex, this.vertexRows[y-1][x]); }
+                if (x > 0 && y > 0) { this.addSpring(vertex, this.vertexRows[y-1][x-1]); }
+                if (y > 0 && x < this.widthSegments) { this.addSpring(vertex, this.vertexRows[y-1][x+1]); }
+                if (x > 1) { this.addSpring(vertex, this.vertexRows[y][x-2]); }
+                if (y > 1) { this.addSpring(vertex, this.vertexRows[y-2][x]); }
+
+                /*for (let i = 3; i<=7; i *= 2) {
+                    if (x > i-1) {
+                        this.addSpring(vertex, this.vertexRows[y][x - i]);
+                    }
+                    if (y > i-1) {
+                        this.addSpring(vertex, this.vertexRows[y - i][x]);
+                    }
+                }*/
+
+                //if (x > 1 && y > 1) { this.addSpring(vertex, this.vertexRows[y-2][x-2]); }
+                //if (y > 1 && x < this.widthSegments - 1) { this.addSpring(vertex, this.vertexRows[y-2][x+2]); }
+
+                //if (x > 2 && y > 2) { this.addSpring(vertex, this.vertexRows[y-3][x-3]); }
+                //if (y > 2 && x < this.widthSegments - 2) { this.addSpring(vertex, this.vertexRows[y-3][x+3]); }
+            }
+        }
+    }
+
+    async createMaterial() {
+        const map = await loadTexture(mapFile);
+        map.wrapS = THREE.ClampToEdgeWrapping;
+        map.wrapT = THREE.ClampToEdgeWrapping;
+
+        const material = new THREE.MeshPhysicalNodeMaterial({
+            transparent: true, roughness: 0.8,
+            //map,
+            //alphaMap: map,
+        });
+        material.colorNode = Fn(() => {
+            const color = texture(map);
+            If(color.a.lessThan(0.9), () => {
+               Discard();
+            });
+            return color.mul(vec4(vec3(0.7), 1));
+        })();
+        material.castShadowNode = Fn(() => {
+            const color = texture(map);
+            If(color.a.lessThan(0.9), () => {
+                Discard();
+            });
+            return texture(map).a.oneMinus();
+        })();
+        //material.opacityNode = texture(alphaMap).r.mul(0.25).add(0.75);
+
+        const vNormal = vec3().toVarying("vNormal");
+        const vOpacity = float(0).toVarying("vOpacity");
+        material.positionNode = Fn( ( { } ) => {
+            const side = attribute( 'side' );
+            const vertexIds = attribute( 'vertexIds' );
+            const vertexOffset = attribute( 'vertexOffset' );
+            const v0 = this.physics.vertexBuffer.element( vertexIds.x.add(vertexOffset) ).get("smoothedPosition").toVar();
+            const v1 = this.physics.vertexBuffer.element( vertexIds.y.add(vertexOffset) ).get("smoothedPosition").toVar();
+            const v2 = this.physics.vertexBuffer.element( vertexIds.z.add(vertexOffset) ).get("smoothedPosition").toVar();
+            const v3 = this.physics.vertexBuffer.element( vertexIds.w.add(vertexOffset) ).get("smoothedPosition").toVar();
+
+            const top = v0.add( v1 );
+            const right = v1.add( v3 );
+            const bottom = v2.add( v3 );
+            const left = v0.add( v2 );
+
+            const tangent = right.sub( left ).normalize().toVar();
+            const bitangent = bottom.sub( top ).normalize().toVar();
+            const n = cross( tangent, bitangent );
+
+            const normal = tangent.mul(side.x).add(bitangent.mul(side.y)).add(n.mul(side.z)).normalize().toVar();
+            vNormal.assign(transformNormalToView(normal));
+
+            const position = v0.add( v1 ).add( v2 ).add( v3 ).mul( 0.25 ).add(normal.mul(clothWidth)).toVar();
+            vOpacity.assign(smoothstep(8, 10, position.x).oneMinus());
+            vOpacity.mulAssign(smoothstep(-10, -8, position.x));
+
+            return position;
+        } )();
+        material.normalNode = vNormal.normalize();
+        material.opacityNode = vOpacity;
+
+        this.material = material;
+
+    }
+
+}
+
+
+================================================
+FILE: src/statue.js
+================================================
+import * as THREE from "three/webgpu";
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import Venus from '../assets/venus_de_milo.glb';
+import VenusSimple from '../assets/venus_simple2.obj';
+
+import {BVH} from "./bvh.js";
+
+const textureLoader = new THREE.TextureLoader();
+const loadTexture = (file) => {
+    return new Promise(resolve => {
+        textureLoader.load(file, texture => {
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            resolve(texture);
+        });
+    });
+}
+
+const objLoader = new OBJLoader();
+const loadObj = (file) => {
+    return new Promise(resolve => {
+        objLoader.load(file, object => {
+            resolve(object);
+        });
+    });
+}
+
+const gltfLoader = new GLTFLoader();
+const loadGltf = (file) => {
+    return new Promise(resolve => {
+        gltfLoader.load(file, object => {
+            resolve(object);
+        });
+    });
+}
+
+const getMesh = (gltf) => {
+  let lastChild = gltf.scene;
+  while (lastChild.children.length > 0) {
+      lastChild = lastChild.children[0];
+  }
+  return lastChild;
+};
+
+export class Statue {
+    constructor() {
+
+    }
+
+    async init() {
+        /*const obj = await loadObj(Venus);
+
+        const textures = [VenusColorMap, VenusRoughnessMap, VenusNormalMap];
+        const [map, roughnessMap, normalMap] = await Promise.all(textures.map(loadTexture));
+        const material = new THREE.MeshStandardNodeMaterial({
+            map, roughnessMap, normalMap,
+        })
+        //material.colorNode = vec4(normalWorld, 1);
+        const geometry = obj.children[0].geometry;
+        geometry.scale(25,25,25);
+        geometry.rotateY(Math.PI * -0.5);*/
+        const objSimple = await loadObj(VenusSimple);
+
+        this.object = getMesh(await loadGltf(Venus));
+        //this.object.geometry = objSimple.children[0].geometry;
+        this.object.castShadow = true;
+        this.object.receiveShadow = true;
+        this.object.scale.set(0.25,0.25,0.25);
+        //this.object.scale.set(1,1,1);
+        this.object.rotation.set(0, Math.PI * -0.5, 0);
+
+
+
+        //console.log(obj);
+        //console.log(objSimple);
+        const geometrySimple = objSimple.children[0].geometry;
+        geometrySimple.scale(25,25,25);
+        geometrySimple.rotateY(Math.PI * -0.5);
+
+        //this.object = new THREE.Mesh(geometry, material);
+        //this.object.castShadow = true;
+        //this.object.receiveShadow = true;
+        this.bvh = new BVH(geometrySimple);
+    }
+
+    update(elapsed) {
+
+    }
+}
+
+
+================================================
+FILE: src/common/gainmap.js
+================================================
+import * as THREE from "three/webgpu";
+import {WebGLRenderer} from "three";
+import {HDRJPGLoader} from "@monogrid/gainmap-js";
+
+export const loadGainmap = async (file) => {
+    const renderer = new WebGLRenderer();
+    const loader = new HDRJPGLoader(renderer)
+    const result = await loader.loadAsync(file);
+    const renderTarget = result.renderTarget;
+    const { width, height } = renderTarget;
+    const buffer = new Float16Array(width * height * 4);
+    await renderer.readRenderTargetPixelsAsync(renderTarget, 0, 0, width, height, buffer);
+
+    const texture = new THREE.DataTexture(buffer, width, height, THREE.RGBAFormat, THREE.HalfFloatType, THREE.UVMapping, THREE.ClampToEdgeWrapping, THREE.ClampToEdgeWrapping, THREE.LinearFilter, THREE.LinearFilter, 1, "srgb-linear");
+    texture.needsUpdate = true;
+    return texture;
+};
+
+
+================================================
+FILE: src/common/noise.js
+================================================
+import {float, Fn, Loop, vec3} from "three/tsl";
+
+const tri = /*@__PURE__*/ Fn( ( [ x ] ) => {
+
+    return x.fract().sub( .5 ).abs();
+
+} ).setLayout( {
+    name: 'tri',
+    type: 'float',
+    inputs: [
+        { name: 'x', type: 'float' }
+    ]
+} );
+
+const trivec = /*@__PURE__*/ Fn( ( [ x ] ) => {
+
+    return x.fract().sub( .5 ).abs();
+
+} ).setLayout( {
+    name: 'trivec',
+    type: 'vec3',
+    inputs: [
+        { name: 'x', type: 'vec3' }
+    ]
+} );
+
+const tri3 = /*@__PURE__*/ Fn( ( [ p ] ) => {
+
+    return vec3( tri( p.z.add( tri( p.y.mul( 1. ) ) ) ), tri( p.z.add( tri( p.x.mul( 1. ) ) ) ), tri( p.y.add( tri( p.x.mul( 1. ) ) ) ) );
+
+} ).setLayout( {
+    name: 'tri3',
+    type: 'vec3',
+    inputs: [
+        { name: 'p', type: 'vec3' }
+    ]
+} );
+
+/**
+ * Generates a noise value from the given position, speed and time parameters.
+ *
+ * @tsl
+ * @function
+ * @param {Node<vec3>} position - The position.
+ * @param {Node<float>} speed - The speed.
+ * @param {Node<float>} time - The time.
+ * @return {Node<float>} The generated noise.
+ */
+export const triNoise3Dvec = /*@__PURE__*/ Fn( ( [ position, speed, time ] ) => {
+
+    const p = vec3( position ).toVar();
+    const z = float( 1.4 ).toVar();
+    const rz = vec3( 0.0 ).toVar();
+    const bp = vec3( p ).toVar();
+
+    Loop( { start: float( 0.0 ), end: float( 3.0 ), type: 'float', condition: '<=' }, () => {
+
+        const dg = vec3( tri3( bp.mul( 2.0 ) ) ).toVar();
+        p.addAssign( dg.add( time.mul( float( 0.1 ).mul( speed ) ) ) );
+        bp.mulAssign( 1.8 );
+        z.mulAssign( 1.5 );
+        p.mulAssign( 1.2 );
+
+        const t = trivec( p.zxy.add( trivec( p.xyz.add( trivec( p.yzx ) ) ) ) ).toVar();
+        rz.addAssign( t.div( z ) );
+        bp.addAssign( 0.14 );
+
+    } );
+
+    return rz;
+
+} ).setLayout( {
+    name: 'triNoise3Dvec',
+    type: 'vec3',
+    inputs: [
+        { name: 'position', type: 'vec3' },
+        { name: 'speed', type: 'float' },
+        { name: 'time', type: 'float' }
+    ]
+} );
+
+
+================================================
+FILE: src/common/structuredArray.js
+================================================
+import {struct, instancedArray} from "three/tsl";
+
+const TYPES = {
+    int: { size: 1, alignment: 1, isFloat: false },
+    uint: { size: 1, alignment: 1, isFloat: false },
+    float: { size: 1, alignment: 1, isFloat: true },
+
+    vec2: { size: 2, alignment: 2, isFloat: true },
+    ivec2: { size: 2, alignment: 2, isFloat: false },
+    uvec2: { size: 2, alignment: 2, isFloat: false },
+
+    vec3: { size: 3, alignment: 4, isFloat: true },
+    ivec3: { size: 3, alignment: 4, isFloat: false },
+    uvec3: { size: 3, alignment: 4, isFloat: false },
+
+    vec4: { size: 4, alignment: 4, isFloat: true },
+    ivec4: { size: 4, alignment: 4, isFloat: false },
+    uvec4: { size: 4, alignment: 4, isFloat: false },
+
+    mat2: { size: 4, alignment: 2, isFloat: true },
+    mat3: { size: 12, alignment: 4, isFloat: true },
+    mat4: { size: 16, alignment: 4, isFloat: true },
+};
+
+function isArrayLike(a){
+    return (
+        a!=null &&
+        typeof(a[Symbol.iterator])==='function' &&
+        typeof(a.length)==='number' &&
+        typeof(a)!=='string'
+    );
+}
+
+export class StructuredArray {
+    structNode = null;
+    buffer = null;
+    layout = null;
+    structSize = 0;
+
+    constructor(layout, length, label) {
+        this.layout = this._parse(layout);
+        this.length = length;
+        this.structNode = struct(this.layout);
+        this.floatArray = new Float32Array(this.structSize * this.length);
+        this.intArray = new Int32Array(this.floatArray.buffer);
+        this.buffer = instancedArray(this.floatArray, this.structNode).label(label);
+    }
+
+    setAtomic(element, value) {
+        const index = Object.keys(this.layout).findIndex(k => k === element);
+        if (index >= 0) {
+            this.buffer.structTypeNode.membersLayout[index].atomic = value;
+        }
+    }
+
+    set(index, element, value) {
+        const member = this.layout[element];
+        if (!member) {
+            return console.error("Unknown element '" + element + "'");
+        }
+        const offset = index * this.structSize + member.offset;
+        const array = member.isFloat ? this.floatArray : this.intArray;
+
+        if (member.size === 1) {
+            if (typeof value !== 'number') {
+                return console.error("Expected a Number value for element '" + element + "'");
+            }
+            array[offset] = value;
+        }
+        if (member.size > 1) {
+            if (typeof value === 'object' && !isArrayLike(value)) {
+                const obj = value;
+                value = [obj.x, obj.y || 0, obj.z || 0, obj.w || 0];
+            }
+            if (!isArrayLike(value) || value.length < member.size) {
+                return console.error("Expected an array of length " + member.size + " for element '" + element + "'");
+            }
+            for (let i = 0; i < member.size; i++) {
+                array[offset + i] = value[i];
+            }
+        }
+    }
+
+    element(index) {
+        return this.buffer.element(index);
+    }
+
+    get(index, element) {
+        return this.buffer.element(index).get(element);
+    }
+
+    _parse(layout) {
+        let offset = 0;
+        const parsedLayout = {};
+
+        const keys = Object.keys(layout);
+        for (let i = 0; i < keys.length; i++) {
+            const key = keys[i];
+            let member = layout[key];
+            if (typeof member === 'string' || member instanceof String) {
+                member = { type: member };
+            }
+            const type = member.type;
+            if (!TYPES[type]) {
+                return console.error("Unknown type '" + type + "'");
+            }
+            const { size, alignment, isFloat } = TYPES[type];
+            member.size = size;
+            member.isFloat = isFloat;
+
+            const rest = offset % alignment;
+            if (rest !== 0) {
+                offset += (alignment - rest);
+            }
+            member.offset = offset;
+            offset += size;
+
+            parsedLayout[key] = member;
+        }
+
+        const rest = offset % 4;
+        if (rest !== 0) {
+            offset += (4 - rest);
+        }
+
+        this.structSize = offset;
+        return parsedLayout;
+    }
+};
+
+
+================================================
+FILE: src/physics/springVisualizer.js
+================================================
+import * as THREE from "three/webgpu";
+import {Fn, select, storage, instanceIndex, mrt} from "three/tsl";
+
+export class SpringVisualizer {
+    physics = null;
+    object = null;
+    count = 0;
+    material = null;
+    constructor(physics){
+        this.physics = physics;
+        this.count = physics.springCount;
+
+        this.positionBuffer = new THREE.BufferAttribute(new Float32Array([0,0,0,1,0,0]), 3, false);
+        this.vertexIndexBuffer = new THREE.StorageBufferAttribute(new Uint32Array([0,1]), 1, Uint32Array);
+        this.vertexIndexAttribute = storage(this.vertexIndexBuffer, "int", 2).toAttribute();
+
+        this.material = new THREE.LineBasicNodeMaterial({ color: 0 });
+        this.material.positionNode = Fn( () => {
+            const spring = this.physics.springBuffer.element(instanceIndex);
+            const v0id = spring.get("vertex0");
+            const v1id = spring.get("vertex1");
+            const ptr = select(this.vertexIndexAttribute.equal(0), v0id, v1id);
+            return this.physics.vertexBuffer.element(ptr).get("position");
+        } )();
+
+        this.geometry = new THREE.InstancedBufferGeometry();
+        this.geometry.setAttribute("position", this.positionBuffer);
+        this.geometry.instanceCount = this.count;
+
+        this.object = new THREE.Line(this.geometry, this.material);
+        this.object.frustumCulled = false;
+    }
+    update(interval, elapsed) {}
+}
+
+
+================================================
+FILE: src/physics/verletGeometry.js
+================================================
+import * as THREE from "three/webgpu";
+import * as BufferGeometryUtils from "three/addons/utils/BufferGeometryUtils.js";
+import {BufferAttribute, Vector2} from "three/webgpu";
+import {attribute, cross, Discard, Fn, If, instanceIndex, texture, transformNormalToView, vec3, vec4} from "three/tsl";
+
+import mapFile from "../assets/sakuraPetal.png";
+
+export class VerletGeometry {
+    physics = null;
+    vertices = [];
+    springs = [];
+    instances = [];
+    widthSegments = 0;
+    heightSegments = 0;
+
+    constructor(physics, widthSegments, heightSegments) {
+        this.physics = physics;
+        this.widthSegments = widthSegments;
+        this.heightSegments = heightSegments;
+    }
+
+    addVertex(position, fixed) {
+        const id = this.vertices.length;
+        const vertex = { id, position, fixed };
+        this.vertices.push(vertex);
+        return vertex;
+    }
+
+    addSpring(vertex0, vertex1) {
+        const id = this.springs.length;
+        this.springs.push({ id, vertex0, vertex1 });
+        return id;
+    }
+
+    addInstance() {
+        const objectId = this.physics.addObject();
+        const verletVertices = new Array(this.vertices.length);
+        this.vertices.forEach((vertex, index) => {
+            const { position, fixed } = vertex;
+            verletVertices[index] = this.physics.addVertex(objectId, position, fixed);
+        });
+        this.springs.forEach((spring, index) => {
+            const vertex0 = verletVertices[spring.vertex0.id];
+            const vertex1 = verletVertices[spring.vertex1.id];
+            this.physics.addSpring(objectId, vertex0, vertex1);
+        })
+    }
+
+}
+
+
+================================================
+FILE: src/physics/verletPhysics.js
+================================================
+import * as THREE from "three/webgpu";
+import {
+    Fn,
+    If,
+    Loop,
+    select,
+    uint,
+    instanceIndex,
+    uniform,
+    instancedArray,
+    float,
+    distance,
+    max,
+    time,
+    vec3, dot, vec4, Return, mix
+} from "three/tsl";
+import {StructuredArray} from "../common/structuredArray.js";
+import {conf} from "../conf.js";
+
+export class VerletPhysics {
+    renderer = null;
+
+    isBaked = false;
+
+    vertices = [];
+
+    springs = [];
+
+    colliders = [];
+
+    forces = [];
+
+    uniforms = {};
+
+    kernels = {};
+
+    objects = [];
+
+    time = 0;
+
+    timeSinceLastStep = 0;
+
+    frameNum = 0;
+
+    constructor(renderer){
+        this.renderer = renderer;
+    }
+
+    addObject() {
+        const id = this.objects.length;
+        const object = {
+            id,
+            position: new THREE.Vector3(),
+            vertexStart: this.vertices.length,
+            vertexCount: 0,
+            springStart: this.springs.length,
+            springCount: 0,
+        };
+        this.objects.push(object);
+        return object;
+    }
+
+    addCollider(collider) {
+        this.colliders.push(collider);
+    }
+
+    addForce(force) {
+        this.forces.push(force);
+    }
+
+    addVertex(objectId, position, fixed = false) {
+        if (this.isBaked) {
+            console.error("Can't add any more vertices!");
+        }
+        const vertex = new THREE.Vector3().copy(position);
+        vertex.id = this.vertices.length;
+        vertex.springs = [];
+        vertex.fixed = fixed;
+        this.vertices.push(vertex);
+        this.objects[objectId].vertexCount++;
+        return vertex;
+    }
+
+    addSpring(objectId, vertex0, vertex1) {
+        if (this.isBaked) {
+            console.error("Can't add any more springs!");
+        }
+        const id = this.springs.length;
+        vertex0.springs.push({ id, sign: 1 });
+        vertex1.springs.push({ id, sign: -1 });
+        const restLength = vertex0.distanceTo(vertex1);
+        this.springs.push({ id, vertex0, vertex1, restLength });
+        this.objects[objectId].springCount++;
+        return id;
+    }
+
+    async bake() {
+        this.vertexCount = this.vertices.length;
+        this.springCount = this.springs.length;
+        this.objectCount = this.objects.length;
+        console.log(this.vertexCount + " vertices");
+        console.log(this.springCount + " springs");
+
+        this.uniforms.dampening = uniform(0.995);
+        this.uniforms.time = uniform(0.0);
+        this.uniforms.stiffness = uniform(conf.stiffness);
+        this.uniforms.friction = uniform(conf.friction);
+
+        const vertexStruct = {
+            position: "vec3",
+            isFixed: "uint",
+            initialPosition: "vec3",
+            springPtr: "uint",
+            force: "vec3",
+            springCount: "uint",
+            smoothedPosition: "vec3",
+        };
+        this.vertexBuffer = new StructuredArray(vertexStruct, this.vertexCount, "verletVertices");
+
+        const springStruct = {
+            restLength: "float",
+            vertex0: "uint",
+            vertex1: "uint",
+            dummy: "float",
+        };
+        this.springBuffer = new StructuredArray(springStruct, this.springCount, "verletSprings");
+
+        const influencerArray = new Int32Array(this.springCount * 2);
+        let influencerPtr = 0;
+        this.vertices.forEach((vertex)=> {
+            const {id, springs, fixed} = vertex;
+            this.vertexBuffer.set(id, "position", vertex.customPos || vertex);
+            this.vertexBuffer.set(id, "smoothedPosition", vertex.customPos || vertex);
+            this.vertexBuffer.set(id, "initialPosition", vertex);
+            this.vertexBuffer.set(id, "isFixed", fixed ? 1 : 0);
+            this.vertexBuffer.set(id, "springPtr", influencerPtr);
+            if (!fixed) {
+                this.vertexBuffer.set(id, "springCount", springs.length);
+                springs.forEach((s, index) => {
+                    //if (index === 0) {
+                        influencerArray[influencerPtr] = (s.id + 1) * s.sign;
+                        influencerPtr++;
+                    //}
+                });
+            }
+        });
+
+        this.influencerData = instancedArray(influencerArray, "int");
+
+        this.springs.forEach((spring)=>{
+            const { id, vertex0, vertex1, restLength } = spring;
+            this.springBuffer.set(id, "vertex0", vertex0.id);
+            this.springBuffer.set(id, "vertex1", vertex1.id);
+            this.springBuffer.set(id, "restLength", restLength);
+        });
+        this.springForceData = instancedArray(this.springCount, 'vec3');
+
+        const firstVertexIdArray = new Uint32Array(this.objectCount);
+        this.objects.forEach((object) => {
+           const { id, vertexStart } = object;
+           firstVertexIdArray[id] = vertexStart;
+        });
+        this.firstVertexIdData = instancedArray(firstVertexIdArray, "uint");
+        this.objectPositionData = instancedArray(this.objectCount, "vec3");
+
+        this.kernels.computeSpringForces = Fn(()=>{
+            const spring = this.springBuffer.element(instanceIndex);
+            const v0id = spring.get("vertex0");
+            const v1id = spring.get("vertex1");
+            const restLength = spring.get("restLength");
+            const stiffness = this.uniforms.stiffness; //params.x;
+            const v0 = this.vertexBuffer.element(v0id).get("position");
+            const v1 = this.vertexBuffer.element(v1id).get("position");
+            const delta = (v1 - v0).toVar();
+            const dist = delta.length().max(0.000001).toVar();
+            const force = (dist - restLength) * stiffness * delta * 0.5 / dist;
+            this.springForceData.element(instanceIndex).assign(force);
+        })().compute(this.springCount);
+
+        this.kernels.computeVertexForces = Fn(()=>{
+            const vertex = this.vertexBuffer.element(instanceIndex);
+
+            If(vertex.get("isFixed").greaterThan(uint(0)), ()=> {
+                Return();
+            });
+
+            const position = vertex.get("position").toVar();
+            const ptrStart = vertex.get("springPtr").toVar();
+            const springCount = vertex.get("springCount").toVar();
+            const ptrEnd = ptrStart.add(springCount).toVar();
+
+            const force = vertex.get("force").toVar();
+            force.mulAssign(this.uniforms.dampening);
+            Loop({ start: ptrStart, end: ptrEnd,  type: 'uint', condition: '<' }, ({ i })=>{
+                const springPtr = this.influencerData.element(i);
+                const springForce = this.springForceData.element(uint(springPtr.abs()) - uint(1));
+                const factor = select(springPtr.greaterThan(0), 1.0, -1.0);
+                force.addAssign(springForce * factor);
+            });
+
+            this.forces.forEach(f => {
+               force.addAssign(f(position, this.uniforms.time));
+            });
+
+            const projectedPoint = position.add(force).toVar();
+            If (projectedPoint.y.lessThan(0), () => {
+                force.y.subAssign(projectedPoint.y);
+                projectedPoint.y.assign(0);
+            });
+
+            const forceMagSquared = dot(force.mul(1.001), force.mul(1.001)).toVar();
+            const [closestPoint, closestNormal] = this.colliders[0].findClosestPoint(projectedPoint, forceMagSquared);
+
+            const closestPointDelta = closestPoint.sub(projectedPoint).toVar("closestPointDelta");
+            const forceSet = force.toVar();
+            If(dot(closestPointDelta, closestNormal).greaterThan(0), () => {
+                force.assign(closestPoint.sub(position));
+                forceSet.assign(force.mul(this.uniforms.friction.oneMinus()));
+            });
+
+            this.vertexBuffer.element(instanceIndex).get("force").assign(forceSet);
+            this.vertexBuffer.element(instanceIndex).get("position").addAssign(force);
+        })().compute(this.vertexCount);
+
+
+        this.kernels.smoothPositions = Fn(()=>{
+            const vertex = this.vertexBuffer.element(instanceIndex);
+            const position = vertex.get("position");
+            const smoothedPosition = vertex.get("smoothedPosition");
+
+            const newPos = mix(smoothedPosition, position, 0.25);
+            vertex.get("smoothedPosition").assign(newPos);
+        })().compute(this.vertexCount);
+
+        this.kernels.readPositions = Fn(()=>{
+            const firstVertex = this.firstVertexIdData.element(instanceIndex);
+            const position = this.vertexBuffer.element(firstVertex).get("position");
+            this.objectPositionData.element(instanceIndex).assign(position);
+        })().compute(this.objects.length);
+
+        this.uniforms.resetVertexStart = uniform(0, "uint");
+        this.uniforms.resetVertexCount = uniform(0, "uint");
+        this.uniforms.resetMatrix = uniform(new THREE.Matrix4());
+        this.kernels.resetVertices = Fn(()=>{
+            If(instanceIndex.greaterThanEqual(this.uniforms.resetVertexCount), () => {
+                Return();
+            });
+            const vertexId = this.uniforms.resetVertexStart.add(instanceIndex).toVar();
+            const vertex = this.vertexBuffer.element(vertexId);
+            const initialPosition = vertex.get("initialPosition").toVar();
+            const transformedPosition = this.uniforms.resetMatrix.mul(vec4(initialPosition, 1)).xyz.toVar();
+            vertex.get("position").assign(transformedPosition);
+            vertex.get("smoothedPosition").assign(transformedPosition);
+            vertex.get("force").assign(0);
+        })().compute(1);
+        await this.renderer.computeAsync(this.kernels.resetVertices); //call once to compile
+
+        this.isBaked = true;
+    }
+
+    async readPositions() {
+        await this.renderer.computeAsync(this.kernels.readPositions);
+        const positions = new Float32Array(await this.renderer.getArrayBufferAsync(this.objectPositionData.value));
+        this.objects.forEach((o, index) => {
+            const x = positions[index*4+0];
+            const y = positions[index*4+1];
+            const z = positions[index*4+2];
+            o.position.set(x,y,z);
+        });
+    }
+
+    async resetObject(id, position, quaternion = new THREE.Quaternion()) {
+        this.objects[id].position.copy(position);
+        const scale = new THREE.Vector3(1,1,1);
+        const matrix = new THREE.Matrix4().compose(position, quaternion, scale);
+        if (this.isBaked) {
+            this.uniforms.resetMatrix.value.copy(matrix);
+            this.uniforms.resetVertexStart.value = this.objects[id].vertexStart;
+            this.uniforms.resetVertexCount.value = this.objects[id].vertexCount;
+            this.kernels.resetVertices.count = this.objects[id].vertexCount;
+            this.kernels.resetVertices.updateDispatchCount();
+            await this.renderer.computeAsync(this.kernels.resetVertices);
+        } else {
+            const { vertexStart, vertexCount } = this.objects[id];
+            for (let i = vertexStart; i < vertexStart + vertexCount; i++) {
+                const pos = this.vertices[i].clone();
+                pos.applyMatrix4(matrix);
+                this.vertices[i].customPos = pos;
+            }
+        }
+    }
+
+    async update(interval, elapsed) {
+        if (!this.isBaked) {
+            console.error("Verlet system not yet baked!");
+        }
+
+        const { stiffness, friction } = conf;
+
+        this.uniforms.stiffness.value = stiffness;
+        this.uniforms.friction.value = friction;
+
+        this.frameNum++;
+        if (this.frameNum % 50 === 0) {
+            this.readPositions().then(() => {}); // no await to prevent blocking!
+        }
+
+        const stepsPerSecond = 360;
+        const timePerStep = 1 / stepsPerSecond;
+        interval = Math.max(Math.min(interval, 1/60), 0.0001);
+        this.timeSinceLastStep += interval;
+
+        while (this.timeSinceLastStep >= timePerStep) {
+            this.time += timePerStep;
+            this.uniforms.time.value = this.time;
+            this.timeSinceLastStep -= timePerStep;
+            await this.renderer.computeAsync(this.kernels.computeSpringForces);
+            await this.renderer.computeAsync(this.kernels.computeVertexForces);
+        }
+        await this.renderer.computeAsync(this.kernels.smoothPositions);
+    }
+}
+
+

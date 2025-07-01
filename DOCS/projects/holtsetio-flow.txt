@@ -1,0 +1,1690 @@
+Directory structure:
+└── holtsetio-flow/
+    ├── README.md
+    ├── CREDITS.md
+    ├── index.html
+    ├── index.js
+    ├── LICENSE
+    ├── package.json
+    ├── vite.config.js
+    └── src/
+        ├── app.js
+        ├── backgroundGeometry.js
+        ├── conf.js
+        ├── info.js
+        ├── lights.js
+        ├── assets/
+        │   └── autumn_field_puresky_1k.hdr
+        ├── common/
+        │   ├── hsv.js
+        │   └── noise.js
+        └── mls-mpm/
+            ├── mlsMpmSimulator.js
+            ├── particleRenderer.js
+            ├── pointRenderer.js
+            └── structuredArray.js
+
+================================================
+FILE: README.md
+================================================
+# Flow
+
+This is a realtime MLS-MPM simulation, running in the browser using the three.js WebGPURenderer.
+
+It started as an implementation of MLS-MPM guided by [matsuoka-601](https://github.com/matsuoka-601)'s great [WebGPU-Ocean](https://github.com/matsuoka-601/WebGPU-Ocean) repo. Then the particle dynamics started to remind me of [Refik Anadol](https://refikanadol.com/)'s digital artworks, so I started to emulate his style instead of trying to render water.
+
+See it running live [here](https://holtsetio.com/lab/flow/)!
+
+[![flow](https://github.com/user-attachments/assets/c499ba90-34b2-4029-a663-f5518d756e60)](https://holtsetio.com/lab/flow/)
+
+## Credits
+
+Full list of credits for the assets can be found [here](CREDITS.md)
+
+## How to run
+```
+npm install
+npm run dev
+```
+
+
+
+================================================
+FILE: CREDITS.md
+================================================
+## Credits
+
+The scene and look are inspired by the great artworks of [Refik Anadol](https://refikanadol.com/).
+
+MLS-MPM implementation is heavily based on [WebGPU-Ocean](https://github.com/matsuoka-601/WebGPU-Ocean) by [matsuoka-601](https://github.com/matsuoka-601).
+
+[HDRi background](https://polyhaven.com/a/autumn_field_puresky) by Jarod Guest and Sergej Majboroda on [Polyhaven.com](https://polyhaven.com).
+
+[Concrete plaster wall texture](https://www.texturecan.com/details/216/) by [texturecan.com](https://texturecan.com).
+
+
+
+================================================
+FILE: index.html
+================================================
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, height=device-height, interactive-widget=resizes-content, shrink-to-fit=0, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" />
+  <meta property="og:title" content="Flow - ThreeJS WebGPU Experiment - holtsetio.com" />
+  <meta property="og:image" content="https://holtsetio.com/img/lab/flow.jpg" />
+  <title>Flow - ThreeJS WebGPU Experiment - holtsetio.com</title>
+  <style>
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      position: relative;
+      overflow: hidden;
+    }
+    #container {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    #veil {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: black;
+      opacity: 1;
+      pointer-events: none;
+      transition: opacity 1s ease-in-out;
+    }
+    #progress-bar {
+      position: absolute;
+      width: 200px;
+      height: 5px;
+      left: 50vw;
+      top: 50vh;
+      transition: opacity 0.2s ease;
+      transform: translateX(-50%) translateY(-50%);
+      background-color: #333;
+    }
+    #progress {
+      position: absolute;
+      width: 0px;
+      height: 5px;
+      left: 0px;
+      top: 0px;
+      transition: width 0.2s ease;
+      background-color: #848484;
+    }
+    #error {
+      position: absolute;
+      left: 50vw;
+      top: 50vh;
+      transform: translateX(-50%) translateY(-50%);
+      color: #FFFFFF;
+      visibility: hidden;
+    }
+  </style>
+  <script defer src="https://s.holtsetio.com/script.js" data-website-id="cb36fa92-2381-4031-8f81-f430a473156d"></script>
+</head>
+<body>
+<div id="container">
+  <div id="veil">
+    <div id="progress-bar"><div id="progress"></div></div>
+    <div id="error"></div>
+  </div>
+  <script src="./index.js" type="module"></script>
+</body>
+</html>
+
+
+
+================================================
+FILE: index.js
+================================================
+import * as THREE from "three/webgpu"
+import App from "./src/app";
+THREE.ColorManagement.enabled = true
+
+const updateLoadingProgressBar = async (frac, delay=0) => {
+    return new Promise(resolve => {
+        const progress = document.getElementById("progress")
+        // 200px is the width of the progress bar defined in index.html
+        progress.style.width = `${frac * 200}px`
+        if (delay === 0) {
+            resolve();
+        } else {
+            setTimeout(resolve, delay)
+        }
+    })
+}
+
+const createRenderer = () => {
+    const renderer = new THREE.WebGPURenderer({
+        //forceWebGL: true,
+        //antialias: true,
+    });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    return renderer;
+}
+
+const error = (msg) => {
+    const progressBar = document.getElementById("progress-bar");
+    progressBar.style.opacity = 0;
+    const error = document.getElementById("error");
+    error.style.visibility = "visible";
+    error.innerText = "Error: " + msg;
+    const veil = document.getElementById("veil");
+    error.style.pointerEvents = "auto";
+};
+
+
+const run = async ()=>{
+    if (!navigator.gpu) {
+        error("Your device does not support WebGPU.");
+        return;
+    }
+
+    const renderer = createRenderer();
+    await (await renderer.init());
+
+    if (!renderer.backend.isWebGPUBackend) {
+        error("Couldn't initialize WebGPU. Make sure WebGPU is supported by your Browser!");
+        return;
+    }
+
+    const container = document.getElementById("container");
+    container.appendChild(renderer.domElement);
+
+    const app = new App(renderer);
+    await app.init(updateLoadingProgressBar);
+
+    const resize = () => {
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        app.resize(window.innerWidth, window.innerHeight);
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    const veil = document.getElementById("veil");
+    veil.style.opacity = 0;
+    const progressBar = document.getElementById("progress-bar");
+    progressBar.style.opacity = 0;
+    const clock = new THREE.Clock();
+    const animate = async ()=>{
+        const delta = clock.getDelta();
+        const elapsed = clock.getElapsedTime();
+        await app.update(delta, elapsed);
+        requestAnimationFrame(animate);
+    };
+    requestAnimationFrame(animate);
+};
+
+run().catch(error => {
+    console.error(error);
+});
+
+
+================================================
+FILE: LICENSE
+================================================
+MIT License
+
+Copyright (c) 2025 Holtsetio
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+================================================
+FILE: package.json
+================================================
+{
+  "name": "flow",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build --mode=production",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@babel/generator": "^7.26.9",
+    "@babel/parser": "^7.26.9",
+    "@babel/traverse": "^7.26.9",
+    "@babel/types": "^7.26.9",
+    "vite": "^6.3.1",
+    "vite-plugin-plain-text": "^1.4.2",
+    "vite-plugin-tsl-operator": "^1.2.3"
+  },
+  "dependencies": {
+    "@tweakpane/plugin-essentials": "^0.2.1",
+    "is-mobile": "^5.0.0",
+    "three": "^0.176.0",
+    "tweakpane": "^4.0.5",
+    "tweakpane-plugin-infodump": "^4.0.2"
+  }
+}
+
+
+
+================================================
+FILE: vite.config.js
+================================================
+import { defineConfig } from 'vite'
+import tslOperatorPlugin from 'vite-plugin-tsl-operator'
+import plainText from 'vite-plugin-plain-text';
+
+export default defineConfig({
+    base: './',
+    assetsInclude: ['**/*.hdr'],
+    server: {
+        port: 1234,
+    },
+    plugins: [
+        tslOperatorPlugin({logs:false}),
+        plainText(
+            [/\.obj$/],
+            { namedExport: false },
+        ),
+    ]
+});
+
+
+================================================
+FILE: src/app.js
+================================================
+import * as THREE from "three/webgpu";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls"
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
+import {Lights} from "./lights";
+import hdri from "./assets/autumn_field_puresky_1k.hdr";
+
+import { float, Fn, mrt, output, pass, vec3, vec4 } from "three/tsl";
+import {conf} from "./conf";
+import {Info} from "./info";
+import MlsMpmSimulator from "./mls-mpm/mlsMpmSimulator";
+import ParticleRenderer from "./mls-mpm/particleRenderer";
+import BackgroundGeometry from "./backgroundGeometry";
+import { bloom } from 'three/examples/jsm/tsl/display/BloomNode.js';
+import PointRenderer from "./mls-mpm/pointRenderer.js";
+
+const loadHdr = async (file) => {
+    const texture = await new Promise(resolve => {
+        new RGBELoader().load(file, result => {
+            result.mapping = THREE.EquirectangularReflectionMapping;
+            result.colo
+            resolve(result);
+        });
+    });
+    return texture;
+}
+
+class App {
+    renderer = null;
+
+    camera = null;
+
+    scene = null;
+
+    controls = null;
+
+    lights = null;
+
+    constructor(renderer) {
+        this.renderer = renderer;
+    }
+
+    async init(progressCallback) {
+        this.info = new Info();
+        conf.init();
+
+        this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 5);
+        this.camera.position.set(0, 0.5, -1);
+        this.camera.updateProjectionMatrix()
+
+        this.scene = new THREE.Scene();
+
+        this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+        this.controls.target.set(0,0.5,0.2);
+        this.controls.enableDamping = true;
+        this.controls.enablePan = false;
+        this.controls.touches = {
+            TWO: THREE.TOUCH.DOLLY_ROTATE,
+        }
+        this.controls.maxDistance = 2.0;
+        this.controls.minPolarAngle = 0.2 * Math.PI;
+        this.controls.maxPolarAngle = 0.8 * Math.PI;
+        this.controls.minAzimuthAngle = 0.7 * Math.PI;
+        this.controls.maxAzimuthAngle = 1.3 * Math.PI;
+
+        await progressCallback(0.1)
+
+        const hdriTexture = await loadHdr(hdri);
+
+        this.scene.background = hdriTexture; //bgNode.mul(2);
+        this.scene.backgroundRotation = new THREE.Euler(0,2.15,0);
+        this.scene.environment = hdriTexture;
+        this.scene.environmentRotation = new THREE.Euler(0,-2.15,0);
+        this.scene.environmentIntensity = 0.5;
+        //this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        this.renderer.toneMappingExposure = 0.66;
+
+        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+        await progressCallback(0.5)
+
+        this.mlsMpmSim = new MlsMpmSimulator(this.renderer);
+        await this.mlsMpmSim.init();
+        this.particleRenderer = new ParticleRenderer(this.mlsMpmSim);
+        this.scene.add(this.particleRenderer.object);
+        this.pointRenderer = new PointRenderer(this.mlsMpmSim);
+        this.scene.add(this.pointRenderer.object);
+
+        this.lights = new Lights();
+        this.scene.add(this.lights.object);
+
+        const backgroundGeometry = new BackgroundGeometry();
+        await backgroundGeometry.init();
+        this.scene.add(backgroundGeometry.object);
+
+
+        const scenePass = pass(this.scene, this.camera);
+        scenePass.setMRT( mrt( {
+            output,
+            bloomIntensity: float( 0 ) // default bloom intensity
+        } ) );
+        const outputPass = scenePass.getTextureNode();
+        const bloomIntensityPass = scenePass.getTextureNode( 'bloomIntensity' );
+        const bloomPass = bloom( outputPass.mul( bloomIntensityPass ) );
+        const postProcessing = new THREE.PostProcessing(this.renderer);
+        postProcessing.outputColorTransform = false;
+        //postProcessing.outputNode = vec4(outputPass.rgb, 1).add( vec4(bloomPass.mul(bloomIntensityPass.sign().oneMinus()).rgb, 0.0) ).renderOutput();
+        //postProcessing.outputNode = outputPass.renderOutput();
+        //(1-2b)*a*a + 2ba
+        postProcessing.outputNode = Fn(() => {
+            const a = outputPass.rgb.clamp(0,1).toVar();
+            const b = bloomPass.rgb.clamp(0,1).mul(bloomIntensityPass.r.sign().oneMinus()).toVar();
+            //return vec4(vec3(1).sub(b).sub(b).mul(a).mul(a).mul(0.0),1.0);
+            //return b;
+            //return a.div(b.oneMinus().max(0.0001)).clamp(0,1);
+            return vec4(vec3(1).sub(b).sub(b).mul(a).mul(a).add(b.mul(a).mul(2)).clamp(0,1),1.0);
+        })().renderOutput();
+
+        this.postProcessing = postProcessing;
+        this.bloomPass = bloomPass;
+        this.bloomPass.threshold.value = 0.001;
+        this.bloomPass.strength.value = 0.94;
+        this.bloomPass.radius.value = 0.8;
+
+
+        this.raycaster = new THREE.Raycaster();
+        this.plane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0.2);
+        this.renderer.domElement.addEventListener("pointermove", (event) => { this.onMouseMove(event); });
+
+        await progressCallback(1.0, 100);
+    }
+
+    resize(width, height) {
+        this.camera.aspect = width / height;
+        this.camera.updateProjectionMatrix();
+    }
+
+    onMouseMove(event) {
+        const pointer = new THREE.Vector2();
+        pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
+        pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        this.raycaster.setFromCamera(pointer, this.camera);
+        const intersect = new THREE.Vector3();
+        this.raycaster.ray.intersectPlane(this.plane, intersect);
+        if (intersect) {
+            this.mlsMpmSim.setMouseRay(this.raycaster.ray.origin, this.raycaster.ray.direction, intersect);
+        }
+    }
+
+
+    async update(delta, elapsed) {
+        conf.begin();
+
+        this.particleRenderer.object.visible = !conf.points;
+        this.pointRenderer.object.visible = conf.points;
+
+        this.controls.update(delta);
+        this.lights.update(elapsed);
+        this.particleRenderer.update();
+        this.pointRenderer.update();
+
+        await this.mlsMpmSim.update(delta,elapsed);
+
+        if (conf.bloom) {
+            await this.postProcessing.renderAsync();
+        } else {
+            await this.renderer.renderAsync(this.scene, this.camera);
+        }
+
+        conf.end();
+    }
+}
+export default App;
+
+
+
+================================================
+FILE: src/backgroundGeometry.js
+================================================
+import * as THREE from "three/webgpu";
+import {
+    Fn,
+    texture,
+    uv,
+    positionWorld
+} from "three/tsl";
+import {OBJLoader} from "three/examples/jsm/loaders/OBJLoader";
+import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import boxObj from './assets/boxSlightlySmooth.obj';
+
+import normalMapFile from './assets/concrete_0016_normal_opengl_1k.png';
+import aoMapFile from './assets/concrete_0016_ao_1k.jpg';
+import colorMapFile from './assets/concrete_0016_color_1k.jpg';
+import roughnessMapFile from './assets/concrete_0016_roughness_1k.jpg';
+
+const textureLoader = new THREE.TextureLoader();
+const loadTexture = (file) => {
+    return new Promise(resolve => {
+        textureLoader.load(file, texture => {
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            resolve(texture);
+        });
+    });
+}
+
+class BackgroundGeometry {
+    object = null;
+    constructor() {
+    }
+    async init() {
+        const objectRaw = new OBJLoader().parse(boxObj);
+        const geometry = BufferGeometryUtils.mergeVertices(objectRaw.children[0].geometry);
+        const uvArray = geometry.attributes.uv.array;
+        for (let i=0; i<uvArray.length; i++) {
+            uvArray[i] *= 10;
+        }
+
+
+        const normalMap = await loadTexture(normalMapFile);
+        const aoMap = await loadTexture(aoMapFile);
+        const map = await loadTexture(colorMapFile);
+        const roughnessMap = await loadTexture(roughnessMapFile);
+
+        const material = new THREE.MeshStandardNodeMaterial({
+            roughness: 0.9,
+            metalness:0.0,
+            normalScale: new THREE.Vector3(1.0, 1.0),
+            normalMap,
+            aoMap,
+            map,
+            roughnessMap,
+        });
+        /*material.mrtNode = mrt( {
+            bloomIntensity: 0
+        } );*/
+        material.aoNode = Fn(() => {
+            return texture(aoMap, uv()).mul(positionWorld.z.div(0.4).mul(0.95).oneMinus());
+        })();
+        material.colorNode = Fn(() => {
+            return texture(map, uv()).mul(positionWorld.z.div(0.4).mul(0.5).oneMinus().mul(0.7));
+        })();
+
+
+        this.box = new THREE.Mesh(geometry, material);
+        this.box.rotation.set(0, Math.PI, 0);
+        this.box.position.set(0, -0.05, 0.22);
+        this.box.castShadow = true;
+        this.box.receiveShadow = true;
+
+        this.object = new THREE.Object3D();
+        this.object.add(this.box);
+    }
+}
+export default BackgroundGeometry;
+
+
+================================================
+FILE: src/conf.js
+================================================
+import {Pane} from 'tweakpane';
+import * as EssentialsPlugin from '@tweakpane/plugin-essentials';
+import mobile from "is-mobile";
+import * as THREE from "three/webgpu";
+
+class Conf {
+    gui = null;
+    maxParticles = 8192 * 16;
+    particles = 8192 * 4;
+
+    bloom = true;
+
+    run = true;
+    noise = 1.0;
+    speed = 1;
+    stiffness = 3.;
+    restDensity = 1.;
+    density = 1;
+    dynamicViscosity = 0.1;
+    gravity = 0;
+    gravitySensorReading = new THREE.Vector3();
+    accelerometerReading = new THREE.Vector3();
+    actualSize = 1;
+    size = 1;
+
+    points = false;
+
+    constructor(info) {
+        if (mobile()) {
+            this.maxParticles = 8192 * 8;
+            this.particles = 4096;
+        }
+        this.updateParams();
+
+    }
+
+    updateParams() {
+        const level = Math.max(this.particles / 8192,1);
+        const size = 1.6/Math.pow(level, 1/3);
+        this.actualSize = size * this.size;
+        this.restDensity = 0.25 * level * this.density;
+    }
+
+    setupGravitySensor() {
+        if (this.gravitySensor) { return; }
+        this.gravitySensor = new GravitySensor({ frequency: 60 });
+        this.gravitySensor.addEventListener("reading", (e) => {
+            this.gravitySensorReading.copy(this.gravitySensor).divideScalar(50);
+            this.gravitySensorReading.setY(this.gravitySensorReading.y * -1);
+        });
+        this.gravitySensor.start();
+    }
+
+    init() {
+        const gui = new Pane()
+        gui.registerPlugin(EssentialsPlugin);
+
+        const stats = gui.addFolder({
+            title: "stats",
+            expanded: false,
+        });
+        this.fpsGraph = stats.addBlade({
+            view: 'fpsgraph',
+            label: 'fps',
+            rows: 2,
+        });
+
+        const settings = gui.addFolder({
+            title: "settings",
+            expanded: false,
+        });
+        settings.addBinding(this, "particles", { min: 4096, max: this.maxParticles, step: 4096 }).on('change', () => { this.updateParams(); });
+        settings.addBinding(this, "size", { min: 0.5, max: 2, step: 0.1 }).on('change', () => { this.updateParams(); });
+        settings.addBinding(this, "bloom");
+        //settings.addBinding(this, "points");
+
+        const simulation = settings.addFolder({
+            title: "simulation",
+            expanded: false,
+        });
+        simulation.addBinding(this, "run");
+        simulation.addBinding(this, "noise", { min: 0, max: 2, step: 0.01 });
+        simulation.addBinding(this, "speed", { min: 0.1, max: 2, step: 0.1 });
+        simulation.addBlade({
+            view: 'list',
+            label: 'gravity',
+            options: [
+                {text: 'back', value: 0},
+                {text: 'down', value: 1},
+                {text: 'center', value: 2},
+                {text: 'device gravity', value: 3},
+            ],
+            value: 0,
+        }).on('change', (ev) => {
+            if (ev.value === 3) {
+                this.setupGravitySensor();
+            }
+            this.gravity = ev.value;
+        });
+        simulation.addBinding(this, "density", { min: 0.4, max: 2, step: 0.1 }).on('change', () => { this.updateParams(); });;
+        /*simulation.addBinding(this, "stiffness", { min: 0.5, max: 10, step: 0.1 });
+        simulation.addBinding(this, "restDensity", { min: 0.5, max: 10, step: 0.1 });
+        simulation.addBinding(this, "dynamicViscosity", { min: 0.01, max: 0.4, step: 0.01 });*/
+
+        /*settings.addBinding(this, "roughness", { min: 0.0, max: 1, step: 0.01 });
+        settings.addBinding(this, "metalness", { min: 0.0, max: 1, step: 0.01 });*/
+
+        this.gui = gui;
+    }
+
+    update() {
+    }
+
+    begin() {
+        this.fpsGraph.begin();
+    }
+    end() {
+        this.fpsGraph.end();
+    }
+}
+export const conf = new Conf();
+
+
+================================================
+FILE: src/info.js
+================================================
+import {Pane} from 'tweakpane';
+import * as InfodumpPlugin from 'tweakpane-plugin-infodump';
+
+export class Info {
+    constructor() {
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        container.style.position = 'absolute';
+        container.style.left = '8px';
+        container.style.bottom = '8px';
+        container.style.maxWidth = '512px';
+        container.style.width = 'calc(100% - 16px)';
+
+        const pane = new Pane({ container })
+        pane.registerPlugin(InfodumpPlugin);
+        this.pane = pane;
+
+        const info = pane.addFolder({
+            title: "info",
+            expanded: false,
+        });
+        this.textBlade = info.addBlade({
+            view: "infodump",
+            content: "Realtime MLS-MPM simulation in the Browser, using WebGPU and written in [ThreeJS](https://threejs.org) TSL. Inspired by the works of [Refik Anadol](https://refikanadol.com/).\n\n" +
+                "MLS-MPM implementation is heavily based on [WebGPU-Ocean](https://github.com/matsuoka-601/WebGPU-Ocean) by [matsuoka-601](https://github.com/matsuoka-601).\n\n" +
+                "View the source code [here](https://github.com/holtsetio/flow/).\n\n" +
+                "[> Other experiments](https://holtsetio.com)",
+            markdown: true,
+        })
+
+        const credits = info.addFolder({
+            title: "credits",
+            expanded: false,
+        });
+        credits.element.style.marginLeft = '0px';
+        credits.addBlade({
+            view: "infodump",
+            content: "[HDRi background](https://polyhaven.com/a/autumn_field_puresky) by Jarod Guest and Sergej Majboroda on [Polyhaven.com](https://polyhaven.com).\n\n" +
+                "[Concrete plaster wall texture](https://www.texturecan.com/details/216/) by [texturecan.com](https://texturecan.com).\n\n",
+            markdown: true,
+        });
+
+    }
+    setText(c) {
+        this.textBlade.controller.view.element.innerHTML = '<div class="tp-induv_t"><p>' + c + '</p></div>';
+        this.pane.refresh();
+    }
+}
+
+
+================================================
+FILE: src/lights.js
+================================================
+import * as THREE from "three/webgpu";
+
+export class Lights {
+    constructor() {
+        this.object = new THREE.Object3D();
+        const light = new THREE.SpotLight(0xffffff, 5, 15, Math.PI * 0.18, 1, 0);
+        const lightTarget = new THREE.Object3D();
+        light.position.set(0., 1.2, -0.8);
+        lightTarget.position.set(0,0.7,0);
+        light.target = lightTarget;
+
+        this.object.add(light);
+        this.object.add(lightTarget);
+        //this.object.add(new THREE.SpotLightHelper(light));
+
+        light.castShadow = true; // default false
+        light.shadow.mapSize.width = 512*2; // default
+        light.shadow.mapSize.height = 512*2; // default
+        light.shadow.bias = -0.005;
+        light.shadow.camera.near = 0.5; // default
+        light.shadow.camera.far = 5;
+
+    }
+
+    update(elapsed) {
+
+    }
+}
+
+
+================================================
+FILE: src/assets/autumn_field_puresky_1k.hdr
+================================================
+[Binary file]
+
+
+================================================
+FILE: src/common/hsv.js
+================================================
+import {float, floor, Fn, If, trunc, vec3, int} from "three/tsl";
+
+export const hsvtorgb = /*@__PURE__*/ Fn( ( [ hsv ] ) => {
+
+    const s = hsv.y;
+    const v = hsv.z;
+
+    const result = vec3().toVar();
+    let h = hsv.x;
+    h = h.sub( floor( h ) ).mul( 6.0 ).toConst(); // TODO: check what .toVar() is needed in node system cache
+    const hi = int( trunc( h ) ).toConst();
+    const f = h.sub( float( hi ) ).toConst();
+    const p = v.mul( s.oneMinus() ).toConst();
+    const q = v.mul( s.mul( f ).oneMinus() ).toConst();
+    const t = v.mul( s.mul( f.oneMinus() ).oneMinus() ).toConst();
+
+    If( s.lessThan( 0.0001 ), () => {
+
+        result.assign( vec3( v, v, v ) );
+
+    } ).ElseIf( hi.equal( int( 0 ) ), () => {
+
+        result.assign( vec3( v, t, p ) );
+
+    } ).ElseIf( hi.equal( int( 1 ) ), () => {
+
+        result.assign( vec3( q, v, p ) );
+
+    } ).ElseIf( hi.equal( int( 2 ) ), () => {
+
+        result.assign( vec3( p, v, t ) );
+
+    } ).ElseIf( hi.equal( int( 3 ) ), () => {
+
+        result.assign( vec3( p, q, v ) );
+
+    } ).ElseIf( hi.equal( int( 4 ) ), () => {
+
+        result.assign( vec3( t, p, v ) );
+
+    } ).Else( () => {
+
+        result.assign( vec3( v, p, q ) );
+
+    } );
+
+    return result;
+
+} ).setLayout( {
+    name: 'hsvtorgb',
+    type: 'vec3',
+    inputs: [
+        { name: 'hsv', type: 'vec3' }
+    ]
+} );
+
+
+================================================
+FILE: src/common/noise.js
+================================================
+import {float, Fn, Loop, vec3} from "three/tsl";
+
+const tri = /*@__PURE__*/ Fn( ( [ x ] ) => {
+
+    return x.fract().sub( .5 ).abs();
+
+} ).setLayout( {
+    name: 'tri',
+    type: 'float',
+    inputs: [
+        { name: 'x', type: 'float' }
+    ]
+} );
+
+const trivec = /*@__PURE__*/ Fn( ( [ x ] ) => {
+
+    return x.fract().sub( .5 ).abs();
+
+} ).setLayout( {
+    name: 'trivec',
+    type: 'vec3',
+    inputs: [
+        { name: 'x', type: 'vec3' }
+    ]
+} );
+
+const tri3 = /*@__PURE__*/ Fn( ( [ p ] ) => {
+
+    return vec3( tri( p.z.add( tri( p.y.mul( 1. ) ) ) ), tri( p.z.add( tri( p.x.mul( 1. ) ) ) ), tri( p.y.add( tri( p.x.mul( 1. ) ) ) ) );
+
+} ).setLayout( {
+    name: 'tri3',
+    type: 'vec3',
+    inputs: [
+        { name: 'p', type: 'vec3' }
+    ]
+} );
+
+/**
+ * Generates a noise value from the given position, speed and time parameters.
+ *
+ * @tsl
+ * @function
+ * @param {Node<vec3>} position - The position.
+ * @param {Node<float>} speed - The speed.
+ * @param {Node<float>} time - The time.
+ * @return {Node<float>} The generated noise.
+ */
+export const triNoise3Dvec = /*@__PURE__*/ Fn( ( [ position, speed, time ] ) => {
+
+    const p = vec3( position ).toVar();
+    const z = float( 1.4 ).toVar();
+    const rz = vec3( 0.0 ).toVar();
+    const bp = vec3( p ).toVar();
+
+    Loop( { start: float( 0.0 ), end: float( 3.0 ), type: 'float', condition: '<=' }, () => {
+
+        const dg = vec3( tri3( bp.mul( 2.0 ) ) ).toVar();
+        p.addAssign( dg.add( time.mul( float( 0.1 ).mul( speed ) ) ) );
+        bp.mulAssign( 1.8 );
+        z.mulAssign( 1.5 );
+        p.mulAssign( 1.2 );
+
+        const t = trivec( p.zxy.add( trivec( p.xyz.add( trivec( p.yzx ) ) ) ) ).toVar();
+        rz.addAssign( t.div( z ) );
+        bp.addAssign( 0.14 );
+
+    } );
+
+    return rz;
+
+} ).setLayout( {
+    name: 'triNoise3Dvec',
+    type: 'vec3',
+    inputs: [
+        { name: 'position', type: 'vec3' },
+        { name: 'speed', type: 'float' },
+        { name: 'time', type: 'float' }
+    ]
+} );
+
+
+================================================
+FILE: src/mls-mpm/mlsMpmSimulator.js
+================================================
+import * as THREE from "three/webgpu";
+import {
+    array,
+    Fn,
+    If,
+    instancedArray,
+    instanceIndex,
+    Return,
+    uniform,
+    int,
+    float,
+    Loop,
+    vec3,
+    vec4,
+    atomicAdd,
+    uint,
+    max,
+    pow,
+    mat3,
+    clamp,
+    time,
+    cross, mix, mx_hsvtorgb, select, ivec3
+} from "three/tsl";
+import {triNoise3Dvec} from "../common/noise";
+import {conf} from "../conf";
+import {StructuredArray} from "./structuredArray.js";
+import {hsvtorgb} from "../common/hsv.js";
+
+class mlsMpmSimulator {
+    renderer = null;
+    numParticles = 0;
+    gridSize = new THREE.Vector3(0,0,0);
+    gridCellSize = new THREE.Vector3(0,0,0);
+    uniforms = {};
+    kernels = {};
+    fixedPointMultiplier = 1e7;
+    mousePos = new THREE.Vector3();
+    mousePosArray = [];
+
+    constructor(renderer) {
+        this.renderer = renderer;
+    }
+    async init() {
+        const {maxParticles} = conf;
+        this.gridSize.set(64,64,64);
+
+        const particleStruct =  {
+            position: { type: 'vec3' },
+            density: { type: 'float' },
+            velocity: { type: 'vec3' },
+            mass: { type: 'float' },
+            C: { type: 'mat3' },
+            direction: { type: 'vec3' },
+            color: { type: 'vec3' },
+        };
+        this.particleBuffer = new StructuredArray(particleStruct, maxParticles, "particleData");
+
+        const vec = new THREE.Vector3();
+        for (let i = 0; i < maxParticles; i++) {
+            let dist = 2;
+            while (dist > 1) {
+                vec.set(Math.random(),Math.random(),Math.random()).multiplyScalar(2.0).subScalar(1.0);
+                dist = vec.length();
+                vec.multiplyScalar(0.8).addScalar(1.0).divideScalar(2.0).multiply(this.gridSize);
+            }
+            const mass = 1.0 - Math.random() * 0.002;
+            this.particleBuffer.set(i, "position", vec);
+            this.particleBuffer.set(i, "mass", mass);
+        }
+
+        const cellCount = this.gridSize.x * this.gridSize.y * this.gridSize.z;
+        const cellStruct ={
+            x: { type: 'int', atomic: true },
+            y: { type: 'int', atomic: true },
+            z: { type: 'int', atomic: true },
+            mass: { type: 'int', atomic: true },
+        };
+        this.cellBuffer = new StructuredArray(cellStruct, cellCount, "cellData");
+        this.cellBufferF = instancedArray(cellCount, 'vec4').label('cellDataF');
+
+        this.uniforms.gravityType = uniform(0, "uint");
+        this.uniforms.gravity = uniform(new THREE.Vector3());
+        this.uniforms.stiffness = uniform(0);
+        this.uniforms.restDensity = uniform(0);
+        this.uniforms.dynamicViscosity = uniform(0);
+        this.uniforms.noise = uniform(0);
+
+        this.uniforms.gridSize = uniform(this.gridSize, "ivec3");
+        this.uniforms.gridCellSize = uniform(this.gridCellSize);
+        this.uniforms.dt = uniform(0.1);
+        this.uniforms.numParticles = uniform(0, "uint");
+
+        this.uniforms.mouseRayDirection = uniform(new THREE.Vector3());
+        this.uniforms.mouseRayOrigin = uniform(new THREE.Vector3());
+        this.uniforms.mouseForce = uniform(new THREE.Vector3());
+
+        this.kernels.clearGrid = Fn(() => {
+            this.cellBuffer.setAtomic("x", false);
+            this.cellBuffer.setAtomic("y", false);
+            this.cellBuffer.setAtomic("z", false);
+            this.cellBuffer.setAtomic("mass", false);
+
+            If(instanceIndex.greaterThanEqual(uint(cellCount)), () => {
+                Return();
+            });
+
+            this.cellBuffer.element(instanceIndex).get('x').assign(0);
+            this.cellBuffer.element(instanceIndex).get('y').assign(0);
+            this.cellBuffer.element(instanceIndex).get('z').assign(0);
+            this.cellBuffer.element(instanceIndex).get('mass').assign(0);
+            this.cellBufferF.element(instanceIndex).assign(0);
+        })().compute(cellCount);
+
+        const encodeFixedPoint = (f32) => {
+            return int(f32.mul(this.fixedPointMultiplier));
+        }
+        const decodeFixedPoint = (i32) => {
+            return float(i32).div(this.fixedPointMultiplier);
+        }
+
+        const getCellPtr = (ipos) => {
+            const gridSize = this.uniforms.gridSize;
+            const cellPtr = int(ipos.x).mul(gridSize.y).mul(gridSize.z).add(int(ipos.y).mul(gridSize.z)).add(int(ipos.z)).toConst();
+            return cellPtr;
+        };
+        const getCell = (ipos) => {
+            return this.cellBuffer.element(getCellPtr(ipos));
+        };
+
+        this.kernels.p2g1 = Fn(() => {
+            this.cellBuffer.setAtomic("x", true);
+            this.cellBuffer.setAtomic("y", true);
+            this.cellBuffer.setAtomic("z", true);
+            this.cellBuffer.setAtomic("mass", true);
+
+            If(instanceIndex.greaterThanEqual(uint(this.uniforms.numParticles)), () => {
+                Return();
+            });
+            const particlePosition = this.particleBuffer.element(instanceIndex).get('position').xyz.toConst("particlePosition");
+            const particleVelocity = this.particleBuffer.element(instanceIndex).get('velocity').xyz.toConst("particleVelocity");
+
+            const cellIndex =  ivec3(particlePosition).sub(1).toConst("cellIndex");
+            const cellDiff = particlePosition.fract().sub(0.5).toConst("cellDiff");
+            const w0 = float(0.5).mul(float(0.5).sub(cellDiff)).mul(float(0.5).sub(cellDiff));
+            const w1 = float(0.75).sub(cellDiff.mul(cellDiff));
+            const w2 = float(0.5).mul(float(0.5).add(cellDiff)).mul(float(0.5).add(cellDiff));
+            const weights = array([w0,w1,w2]).toConst("weights");
+
+            const C = this.particleBuffer.element(instanceIndex).get('C').toConst();
+            Loop({ start: 0, end: 3, type: 'int', name: 'gx', condition: '<' }, ({gx}) => {
+                Loop({ start: 0, end: 3, type: 'int', name: 'gy', condition: '<' }, ({gy}) => {
+                    Loop({ start: 0, end: 3, type: 'int', name: 'gz', condition: '<' }, ({gz}) => {
+                        const weight = weights.element(gx).x.mul(weights.element(gy).y).mul(weights.element(gz).z);
+                        const cellX = cellIndex.add(ivec3(gx,gy,gz)).toConst();
+                        const cellDist = vec3(cellX).add(0.5).sub(particlePosition).toConst("cellDist");
+                        const Q = C.mul(cellDist);
+
+                        const massContrib = weight; // assuming particle mass = 1.0
+                        const velContrib = massContrib.mul(particleVelocity.add(Q)).toConst("velContrib");
+                        const cell = getCell(cellX);
+                        atomicAdd(cell.get('x'), encodeFixedPoint(velContrib.x));
+                        atomicAdd(cell.get('y'), encodeFixedPoint(velContrib.y));
+                        atomicAdd(cell.get('z'), encodeFixedPoint(velContrib.z));
+                        atomicAdd(cell.get('mass'), encodeFixedPoint(massContrib));
+                    });
+                });
+            });
+        })().compute(1);
+
+
+        this.kernels.p2g2 = Fn(() => {
+            this.cellBuffer.setAtomic("x", true);
+            this.cellBuffer.setAtomic("y", true);
+            this.cellBuffer.setAtomic("z", true);
+            this.cellBuffer.setAtomic("mass", false);
+
+            If(instanceIndex.greaterThanEqual(uint(this.uniforms.numParticles)), () => {
+                Return();
+            });
+            const particlePosition = this.particleBuffer.element(instanceIndex).get('position').xyz.toConst("particlePosition");
+
+            const cellIndex =  ivec3(particlePosition).sub(1).toConst("cellIndex");
+            const cellDiff = particlePosition.fract().sub(0.5).toConst("cellDiff");
+            const w0 = float(0.5).mul(float(0.5).sub(cellDiff)).mul(float(0.5).sub(cellDiff));
+            const w1 = float(0.75).sub(cellDiff.mul(cellDiff));
+            const w2 = float(0.5).mul(float(0.5).add(cellDiff)).mul(float(0.5).add(cellDiff));
+            const weights = array([w0,w1,w2]).toConst("weights");
+
+            const density = float(0).toVar("density");
+            Loop({ start: 0, end: 3, type: 'int', name: 'gx', condition: '<' }, ({gx}) => {
+                Loop({ start: 0, end: 3, type: 'int', name: 'gy', condition: '<' }, ({gy}) => {
+                    Loop({ start: 0, end: 3, type: 'int', name: 'gz', condition: '<' }, ({gz}) => {
+                        const weight = weights.element(gx).x.mul(weights.element(gy).y).mul(weights.element(gz).z);
+                        const cellX = cellIndex.add(ivec3(gx,gy,gz)).toConst();
+                        const cell = getCell(cellX);
+                        density.addAssign(decodeFixedPoint(cell.get('mass')).mul(weight));
+                    });
+                });
+            });
+            const densityStore = this.particleBuffer.element(instanceIndex).get('density');
+            densityStore.assign(mix(densityStore, density, 0.05));
+
+            const volume = float(1).div(density);
+            const pressure = max(0.0, pow(density.div(this.uniforms.restDensity), 5.0).sub(1).mul(this.uniforms.stiffness)).toConst('pressure');
+            const stress = mat3(pressure.negate(), 0, 0, 0, pressure.negate(), 0, 0, 0, pressure.negate()).toVar('stress');
+            const dudv = this.particleBuffer.element(instanceIndex).get('C').toConst('C');
+
+            const strain = dudv.add(dudv.transpose());
+            stress.addAssign(strain.mul(this.uniforms.dynamicViscosity));
+            const eq16Term0 = volume.mul(-4).mul(stress).mul(this.uniforms.dt);
+
+            Loop({ start: 0, end: 3, type: 'int', name: 'gx', condition: '<' }, ({gx}) => {
+                Loop({ start: 0, end: 3, type: 'int', name: 'gy', condition: '<' }, ({gy}) => {
+                    Loop({ start: 0, end: 3, type: 'int', name: 'gz', condition: '<' }, ({gz}) => {
+                        const weight = weights.element(gx).x.mul(weights.element(gy).y).mul(weights.element(gz).z);
+                        const cellX = cellIndex.add(ivec3(gx,gy,gz)).toConst();
+                        const cellDist = vec3(cellX).add(0.5).sub(particlePosition).toConst("cellDist");
+                        const cell= getCell(cellX);
+
+                        const momentum = eq16Term0.mul(weight).mul(cellDist).toConst("momentum");
+                        atomicAdd(cell.get('x'), encodeFixedPoint(momentum.x));
+                        atomicAdd(cell.get('y'), encodeFixedPoint(momentum.y));
+                        atomicAdd(cell.get('z'), encodeFixedPoint(momentum.z));
+                    });
+                });
+            });
+        })().compute(1);
+
+
+        this.kernels.updateGrid = Fn(() => {
+            this.cellBuffer.setAtomic("x", false);
+            this.cellBuffer.setAtomic("y", false);
+            this.cellBuffer.setAtomic("z", false);
+            this.cellBuffer.setAtomic("mass", false);
+
+            If(instanceIndex.greaterThanEqual(uint(cellCount)), () => {
+                Return();
+            });
+            const cell = this.cellBuffer.element(instanceIndex).toConst("cell");
+
+            const mass = decodeFixedPoint(cell.get('mass')).toConst();
+            If(mass.lessThanEqual(0), () => { Return(); });
+
+            const vx = decodeFixedPoint(cell.get('x')).div(mass).toVar();
+            const vy = decodeFixedPoint(cell.get('y')).div(mass).toVar();
+            const vz = decodeFixedPoint(cell.get('z')).div(mass).toVar();
+
+            const x = int(instanceIndex).div(this.uniforms.gridSize.z).div(this.uniforms.gridSize.y);
+            const y = int(instanceIndex).div(this.uniforms.gridSize.z).mod(this.uniforms.gridSize.y);
+            const z = int(instanceIndex).mod(this.uniforms.gridSize.z);
+
+
+            If(x.lessThan(int(2)).or(x.greaterThan(this.uniforms.gridSize.x.sub(int(2)))), () => {
+                vx.assign(0);
+            });
+            If(y.lessThan(int(2)).or(y.greaterThan(this.uniforms.gridSize.y.sub(int(2)))), () => {
+                vy.assign(0);
+            });
+            If(z.lessThan(int(2)).or(z.greaterThan(this.uniforms.gridSize.z.sub(int(2)))), () => {
+                vz.assign(0);
+            });
+
+            this.cellBufferF.element(instanceIndex).assign(vec4(vx,vy,vz,mass));
+        })().compute(cellCount);
+
+        this.kernels.g2p = Fn(() => {
+            If(instanceIndex.greaterThanEqual(uint(this.uniforms.numParticles)), () => {
+                Return();
+            });
+            const particleMass = this.particleBuffer.element(instanceIndex).get('mass').toConst("particleMass");
+            const particleDensity = this.particleBuffer.element(instanceIndex).get('density').toConst("particleDensity");
+            const particlePosition = this.particleBuffer.element(instanceIndex).get('position').xyz.toVar("particlePosition");
+            const particleVelocity = vec3(0).toVar();
+            If(this.uniforms.gravityType.equal(uint(2)), () => {
+                const pn = particlePosition.div(vec3(this.uniforms.gridSize.sub(1))).sub(0.5).normalize().toConst();
+                particleVelocity.subAssign(pn.mul(0.3).mul(this.uniforms.dt));
+            }).Else(() => {
+                particleVelocity.addAssign(this.uniforms.gravity.mul(this.uniforms.dt));
+            });
+
+
+            const noise = triNoise3Dvec(particlePosition.mul(0.015), time, 0.11).sub(0.285).normalize().mul(0.28).toVar();
+            particleVelocity.subAssign(noise.mul(this.uniforms.noise).mul(this.uniforms.dt));
+
+            const cellIndex =  ivec3(particlePosition).sub(1).toConst("cellIndex");
+            const cellDiff = particlePosition.fract().sub(0.5).toConst("cellDiff");
+
+            const w0 = float(0.5).mul(float(0.5).sub(cellDiff)).mul(float(0.5).sub(cellDiff));
+            const w1 = float(0.75).sub(cellDiff.mul(cellDiff));
+            const w2 = float(0.5).mul(float(0.5).add(cellDiff)).mul(float(0.5).add(cellDiff));
+            const weights = array([w0,w1,w2]).toConst("weights");
+
+            const B = mat3(0).toVar("B");
+            Loop({ start: 0, end: 3, type: 'int', name: 'gx', condition: '<' }, ({gx}) => {
+                Loop({ start: 0, end: 3, type: 'int', name: 'gy', condition: '<' }, ({gy}) => {
+                    Loop({ start: 0, end: 3, type: 'int', name: 'gz', condition: '<' }, ({gz}) => {
+                        const weight = weights.element(gx).x.mul(weights.element(gy).y).mul(weights.element(gz).z);
+                        const cellX = cellIndex.add(ivec3(gx,gy,gz)).toConst();
+                        const cellDist = vec3(cellX).add(0.5).sub(particlePosition).toConst("cellDist");
+                        const cellPtr = getCellPtr(cellX);
+
+                        const weightedVelocity = this.cellBufferF.element(cellPtr).xyz.mul(weight).toConst("weightedVelocity");
+                        const term = mat3(
+                            weightedVelocity.mul(cellDist.x),
+                            weightedVelocity.mul(cellDist.y),
+                            weightedVelocity.mul(cellDist.z)
+                        );
+                        B.addAssign(term);
+                        particleVelocity.addAssign(weightedVelocity);
+                    });
+                });
+            });
+
+            const dist = cross(this.uniforms.mouseRayDirection, particlePosition.mul(vec3(1,1,0.4)).sub(this.uniforms.mouseRayOrigin)).length()
+            const force = dist.mul(0.1).oneMinus().max(0.0).pow(2);
+            //particleVelocity.assign(mix(particleVelocity, this.uniforms.mouseForce.mul(6), force));
+            particleVelocity.addAssign(this.uniforms.mouseForce.mul(1).mul(force));
+            particleVelocity.mulAssign(particleMass); // to ensure difference between particles
+
+            this.particleBuffer.element(instanceIndex).get('C').assign(B.mul(4));
+            particlePosition.addAssign(particleVelocity.mul(this.uniforms.dt));
+            particlePosition.assign(clamp(particlePosition, vec3(2), this.uniforms.gridSize.sub(2)));
+
+            const wallStiffness = 0.3;
+            const xN = particlePosition.add(particleVelocity.mul(this.uniforms.dt).mul(3.0)).toConst("xN");
+            const wallMin = vec3(3).toConst("wallMin");
+            const wallMax = vec3(this.uniforms.gridSize).sub(3).toConst("wallMax");
+            If(xN.x.lessThan(wallMin.x), () => { particleVelocity.x.addAssign(wallMin.x.sub(xN.x).mul(wallStiffness)); });
+            If(xN.x.greaterThan(wallMax.x), () => { particleVelocity.x.addAssign(wallMax.x.sub(xN.x).mul(wallStiffness)); });
+            If(xN.y.lessThan(wallMin.y), () => { particleVelocity.y.addAssign(wallMin.y.sub(xN.y).mul(wallStiffness)); });
+            If(xN.y.greaterThan(wallMax.y), () => { particleVelocity.y.addAssign(wallMax.y.sub(xN.y).mul(wallStiffness)); });
+            If(xN.z.lessThan(wallMin.z), () => { particleVelocity.z.addAssign(wallMin.z.sub(xN.z).mul(wallStiffness)); });
+            If(xN.z.greaterThan(wallMax.z), () => { particleVelocity.z.addAssign(wallMax.z.sub(xN.z).mul(wallStiffness)); });
+
+            this.particleBuffer.element(instanceIndex).get('position').assign(particlePosition)
+            this.particleBuffer.element(instanceIndex).get('velocity').assign(particleVelocity)
+
+            const direction = this.particleBuffer.element(instanceIndex).get('direction');
+            direction.assign(mix(direction,particleVelocity, 0.1));
+
+            const color = hsvtorgb(vec3(particleDensity.div(this.uniforms.restDensity).mul(0.25).add(time.mul(0.05)), particleVelocity.length().mul(0.5).clamp(0,1).mul(0.3).add(0.7), force.mul(0.3).add(0.7)));
+            this.particleBuffer.element(instanceIndex).get('color').assign(color);
+        })().compute(1);
+    }
+
+    setMouseRay(origin, direction, pos) {
+        origin.multiplyScalar(64);
+        pos.multiplyScalar(64);
+        origin.add(new THREE.Vector3(32,0,0));
+        this.uniforms.mouseRayDirection.value.copy(direction.normalize());
+        this.uniforms.mouseRayOrigin.value.copy(origin);
+        this.mousePos.copy(pos);
+    }
+
+    async update(interval, elapsed) {
+        const { particles, run, noise, dynamicViscosity, stiffness, restDensity, speed, gravity, gravitySensorReading, accelerometerReading } = conf;
+
+        this.uniforms.noise.value = noise;
+        this.uniforms.stiffness.value = stiffness;
+        this.uniforms.gravityType.value = gravity;
+        if (gravity === 0) {
+            this.uniforms.gravity.value.set(0,0,0.2);
+        } else if (gravity === 1) {
+            this.uniforms.gravity.value.set(0,-0.2,0);
+        } else if (gravity === 3) {
+            this.uniforms.gravity.value.copy(gravitySensorReading).add(accelerometerReading);
+        }
+        this.uniforms.dynamicViscosity.value = dynamicViscosity;
+        this.uniforms.restDensity.value = restDensity;
+
+        if (particles !== this.numParticles) {
+            this.numParticles = particles;
+            this.uniforms.numParticles.value = particles;
+            this.kernels.p2g1.count = particles;
+            this.kernels.p2g1.updateDispatchCount();
+            this.kernels.p2g2.count = particles;
+            this.kernels.p2g2.updateDispatchCount();
+            this.kernels.g2p.count = particles;
+            this.kernels.g2p.updateDispatchCount();
+        }
+
+        interval = Math.min(interval, 1/60);
+        const dt = interval * 6 * speed;
+        this.uniforms.dt.value = dt;
+
+        this.mousePosArray.push(this.mousePos.clone())
+        if (this.mousePosArray.length > 3) { this.mousePosArray.shift(); }
+        if (this.mousePosArray.length > 1) {
+            this.uniforms.mouseForce.value.copy(this.mousePosArray[this.mousePosArray.length - 1]).sub(this.mousePosArray[0]).divideScalar(this.mousePosArray.length);
+        }
+
+
+        if (run) {
+            const kernels = [this.kernels.clearGrid, this.kernels.p2g1, this.kernels.p2g2, this.kernels.updateGrid, this.kernels.g2p];
+            await this.renderer.computeAsync(kernels);
+        }
+    }
+}
+
+export default mlsMpmSimulator;
+
+
+================================================
+FILE: src/mls-mpm/particleRenderer.js
+================================================
+import * as THREE from "three/webgpu";
+import {Fn, attribute, triNoise3D, time, vec3, vec4, float, varying,instanceIndex,mix,normalize,cross,mat3,normalLocal,transformNormalToView,mx_hsvtorgb,mrt,uniform} from "three/tsl";
+import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import {conf} from "../conf";
+
+
+export const calcLookAtMatrix = /*#__PURE__*/ Fn( ( [ target_immutable ] ) => {
+    const target = vec3( target_immutable ).toVar();
+    const rr = vec3( 0,0,1.0 ).toVar();
+    const ww = vec3( normalize( target ) ).toVar();
+    const uu = vec3( normalize( cross( ww, rr ) ).negate() ).toVar();
+    const vv = vec3( normalize( cross( uu, ww ) ).negate() ).toVar();
+
+    return mat3( uu, vv, ww );
+} ).setLayout( {
+    name: 'calcLookAtMatrix',
+    type: 'mat3',
+    inputs: [
+        { name: 'direction', type: 'vec3' },
+    ]
+} );
+
+const createRoundedBox = (width, height, depth, radius) => {
+    //completely overengineered late night programming lol
+    const box = new THREE.BoxGeometry(width - radius*2, height - radius*2, depth - radius*2);
+    const epsilon = Math.min(width, height, depth) * 0.01;
+    const positionArray = box.attributes.position.array;
+    const normalArray = box.attributes.normal.array;
+    const indices = [...(box.getIndex().array)];
+    const vertices = [];
+    const posMap = {};
+    const edgeMap = {};
+    for (let i=0; i<positionArray.length / 3; i++) {
+        const oldPosition = new THREE.Vector3(positionArray[i*3], positionArray[i*3+1], positionArray[i*3+2]);
+        positionArray[i*3+0] += normalArray[i*3+0] * radius;
+        positionArray[i*3+1] += normalArray[i*3+1] * radius;
+        positionArray[i*3+2] += normalArray[i*3+2] * radius;
+        const vertex = new THREE.Vector3(positionArray[i*3], positionArray[i*3+1], positionArray[i*3+2]);
+        vertex.normal = new THREE.Vector3(normalArray[i*3], normalArray[i*3+1], normalArray[i*3+2]);
+        vertex.id = i;
+        vertex.faces = [];
+        vertex.posHash = oldPosition.toArray().map(v => Math.round(v / epsilon)).join("_");
+        posMap[vertex.posHash] = [...(posMap[vertex.posHash] || []), vertex];
+        vertices.push(vertex);
+    }
+    vertices.forEach(vertex => {
+        const face = vertex.normal.toArray().map(v => Math.round(v)).join("_");
+        vertex.face = face;
+        posMap[vertex.posHash].forEach(vertex => { vertex.faces.push(face); } );
+    });
+    vertices.forEach(vertex => {
+        const addVertexToEdgeMap = (vertex, entry) => {
+            edgeMap[entry] = [...(edgeMap[entry] || []), vertex];
+        }
+        vertex.faces.sort();
+        const f0 = vertex.faces[0];
+        const f1 = vertex.faces[1];
+        const f2 = vertex.faces[2];
+        const face = vertex.face;
+        if (f0 === face || f1 === face) addVertexToEdgeMap(vertex, f0 + "_" + f1);
+        if (f0 === face || f2 === face) addVertexToEdgeMap(vertex, f0 + "_" + f2);
+        if (f1 === face || f2 === face) addVertexToEdgeMap(vertex, f1 + "_" + f2);
+    });
+
+    const addFace = (v0,v1,v2) => {
+        const a = v1.clone().sub(v0);
+        const b = v2.clone().sub(v0);
+        if (a.cross(b).dot(v0) > 0) {
+            indices.push(v0.id, v1.id, v2.id);
+        } else {
+            indices.push(v0.id, v2.id, v1.id);
+        }
+    }
+
+    Object.keys(posMap).forEach(key => {
+        addFace(...posMap[key])
+    });
+
+    Object.keys(edgeMap).forEach(key => {
+        const edgeVertices = edgeMap[key];
+        const v0 = edgeVertices[0];
+        edgeVertices.sort((v1,v2) => v1.distanceTo(v0) - v2.distanceTo(v0));
+        addFace(...edgeVertices.slice(0,3));
+        addFace(...edgeVertices.slice(1,4));
+    });
+
+    box.setIndex(indices);
+    return box;
+}
+
+
+class ParticleRenderer {
+    mlsMpmSim = null;
+    object = null;
+    bloom = false;
+    uniforms = {};
+
+    constructor(mlsMpmSim) {
+        this.mlsMpmSim = mlsMpmSim;
+
+        /*const box = new THREE.BoxGeometry(0.7, 0.7,3);
+        const cone = new THREE.ConeGeometry( 0.5, 3.0, 8 );
+        cone.applyQuaternion(new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI* 0.5, 0, 0)))
+        this.geometry =  new THREE.InstancedBufferGeometry().copy(cone);
+        console.log(this.geometry);*/
+
+        //const sphereGeometry = BufferGeometryUtils.mergeVertices(new THREE.IcosahedronGeometry(0.5, 1));
+        const boxGeometry = BufferGeometryUtils.mergeVertices(new THREE.BoxGeometry(7, 7,30), 3.0);
+        boxGeometry.attributes.position.array = boxGeometry.attributes.position.array.map(v => v*0.1);
+        const roundedBoxGeometry = createRoundedBox(0.7,0.7,3,0.1); //BufferGeometryUtils.mergeVertices(new RoundedBoxGeometry(0.7,0.7,3,1,0.1));
+
+        this.defaultIndexCount = roundedBoxGeometry.index.count;
+        this.shadowIndexCount = boxGeometry.index.count;
+
+        const mergedGeometry = BufferGeometryUtils.mergeGeometries([roundedBoxGeometry, boxGeometry]);
+
+        this.geometry = new THREE.InstancedBufferGeometry().copy(mergedGeometry);
+
+        this.geometry.setDrawRange(0, this.defaultIndexCount);
+        this.geometry.instanceCount = this.mlsMpmSim.numParticles;
+
+        this.material = new THREE.MeshStandardNodeMaterial({
+            metalness: 0.900,
+            roughness: 0.50,
+            //iridescence: 1.0,
+        });
+
+        this.uniforms.size = uniform(1);
+        const vAo = varying(0, "vAo");
+        const vNormal = varying(vec3(0), "v_normalView");
+
+        const particle = this.mlsMpmSim.particleBuffer.element(instanceIndex);
+        this.material.positionNode = Fn(() => {
+            const particlePosition = particle.get("position");
+            const particleDensity = particle.get("density");
+            const particleDirection = particle.get("direction");
+
+            //return attribute("position").xyz.mul(10).add(vec3(32,32,0));
+            //return attribute("position").xyz.mul(0.1).add(positionAttribute.mul(vec3(1,1,0.4)));
+            const mat = calcLookAtMatrix(particleDirection.xyz);
+            vNormal.assign(transformNormalToView(mat.mul(normalLocal)));
+            vAo.assign(particlePosition.z.div(64));
+            vAo.assign(vAo.mul(vAo).oneMinus());
+            return mat.mul(attribute("position").xyz.mul(this.uniforms.size)).mul(particleDensity.mul(0.4).add(0.5).clamp(0,1)).add(particlePosition.mul(vec3(1,1,0.4)));
+        })();
+        this.material.colorNode = particle.get("color");
+        this.material.aoNode = vAo;
+
+        //this.material.fragmentNode = vec4(0,0,0,1);
+        //this.material.envNode = vec3(0.5);
+
+        this.object = new THREE.Mesh(this.geometry, this.material);
+        this.object.onBeforeShadow = () => { this.geometry.setDrawRange(this.defaultIndexCount, Infinity); }
+        this.object.onAfterShadow = () => { this.geometry.setDrawRange(0, this.defaultIndexCount); }
+
+
+        this.object.frustumCulled = false;
+
+        const s = (1/64);
+        this.object.position.set(-32.0*s,0,0);
+        this.object.scale.set(s,s,s);
+        this.object.castShadow = true;
+        this.object.receiveShadow = true;
+    }
+
+    update() {
+        const { particles, bloom, actualSize } = conf;
+        this.uniforms.size.value = actualSize;
+        this.geometry.instanceCount = particles;
+
+        if (bloom !== this.bloom) {
+            this.bloom = bloom;
+            this.material.mrtNode = bloom ? mrt( {
+                bloomIntensity: 1
+            } ) : null;
+        }
+    }
+}
+export default ParticleRenderer;
+
+
+================================================
+FILE: src/mls-mpm/pointRenderer.js
+================================================
+import * as THREE from "three/webgpu";
+import {Fn, vec3,instanceIndex} from "three/tsl";
+import {conf} from "../conf";
+
+class PointRenderer {
+    mlsMpmSim = null;
+    object = null;
+
+    constructor(mlsMpmSim) {
+        this.mlsMpmSim = mlsMpmSim;
+
+        this.geometry = new THREE.InstancedBufferGeometry();
+        const positionBuffer = new THREE.BufferAttribute(new Float32Array(3), 3, false);
+        const material = new THREE.PointsNodeMaterial();
+        this.geometry.setAttribute('position', positionBuffer);
+        this.object = new THREE.Points(this.geometry, material);
+        material.positionNode = Fn(() => {
+            return this.mlsMpmSim.particleBuffer.element(instanceIndex).get('position').mul(vec3(1,1,0.4));
+        })();
+
+        this.object.frustumCulled = false;
+
+        const s = (1/64);
+        this.object.position.set(-32.0*s,0,0);
+        this.object.scale.set(s,s,s);
+        this.object.castShadow = true;
+        this.object.receiveShadow = true;
+    }
+
+    update() {
+        const { particles } = conf;
+        this.geometry.instanceCount = particles;
+    }
+}
+export default PointRenderer;
+
+
+================================================
+FILE: src/mls-mpm/structuredArray.js
+================================================
+import {struct, instancedArray} from "three/tsl";
+
+const TYPES = {
+    int: { size: 1, alignment: 1, isFloat: false },
+    uint: { size: 1, alignment: 1, isFloat: false },
+    float: { size: 1, alignment: 1, isFloat: true },
+
+    vec2: { size: 2, alignment: 2, isFloat: true },
+    ivec2: { size: 2, alignment: 2, isFloat: false },
+    uvec2: { size: 2, alignment: 2, isFloat: false },
+
+    vec3: { size: 3, alignment: 4, isFloat: true },
+    ivec3: { size: 3, alignment: 4, isFloat: false },
+    uvec3: { size: 3, alignment: 4, isFloat: false },
+
+    vec4: { size: 4, alignment: 4, isFloat: true },
+    ivec4: { size: 4, alignment: 4, isFloat: false },
+    uvec4: { size: 4, alignment: 4, isFloat: false },
+
+    mat2: { size: 4, alignment: 2, isFloat: true },
+    mat3: { size: 12, alignment: 4, isFloat: true },
+    mat4: { size: 16, alignment: 4, isFloat: true },
+};
+
+export class StructuredArray {
+    structNode = null;
+    buffer = null;
+    layout = null;
+    structSize = 0;
+
+    constructor(layout, length, label) {
+        this.layout = this._parse(layout);
+        this.length = length;
+        this.structNode = struct(this.layout);
+        this.floatArray = new Float32Array(this.structSize * this.length);
+        this.intArray = new Int32Array(this.floatArray.buffer);
+        this.buffer = instancedArray(this.floatArray, this.structNode).label(label);
+    }
+
+    setAtomic(element, value) {
+        const index = Object.keys(this.layout).findIndex(k => k === element);
+        if (index >= 0) {
+            this.buffer.structTypeNode.membersLayout[index].atomic = value;
+        }
+    }
+
+    set(index, element, value) {
+        const member = this.layout[element];
+        if (!member) {
+            return console.error("Unknown element '" + element + "'");
+        }
+        const offset = index * this.structSize + member.offset;
+        const array = member.isFloat ? this.floatArray : this.intArray;
+
+        if (member.size === 1) {
+            if (typeof value !== 'number') {
+                return console.error("Expected a Number value for element '" + element + "'");
+            }
+            array[offset] = value;
+        }
+        if (member.size > 1) {
+            if (typeof value === 'object' && !Array.isArray(value)) {
+                const obj = value;
+                value = [obj.x, obj.y || 0, obj.z || 0, obj.w || 0];
+            }
+            if (!Array.isArray(value) || value.length < member.size) {
+                return console.error("Expected an array of length " + member.size + " for element '" + element + "'");
+            }
+            for (let i = 0; i < member.size; i++) {
+                array[offset + i] = value[i];
+            }
+        }
+    }
+
+    element(index) {
+        return this.buffer.element(index);
+    }
+
+    get(index, element) {
+        return this.buffer.element(index).get(element);
+    }
+
+    _parse(layout) {
+        let offset = 0;
+        const parsedLayout = {};
+
+        const keys = Object.keys(layout);
+        for (let i = 0; i < keys.length; i++) {
+            const key = keys[i];
+            let member = layout[key];
+            if (typeof member === 'string' || member instanceof String) {
+                member = { type: member };
+            }
+            const type = member.type;
+            if (!TYPES[type]) {
+                return console.error("Unknown type '" + type + "'");
+            }
+            const { size, alignment, isFloat } = TYPES[type];
+            member.size = size;
+            member.isFloat = isFloat;
+
+            const rest = offset % alignment;
+            if (rest !== 0) {
+                offset += (alignment - rest);
+            }
+            member.offset = offset;
+            offset += size;
+
+            parsedLayout[key] = member;
+        }
+
+        const rest = offset % 4;
+        if (rest !== 0) {
+            offset += (4 - rest);
+        }
+
+        this.structSize = offset;
+        return parsedLayout;
+    }
+};
+

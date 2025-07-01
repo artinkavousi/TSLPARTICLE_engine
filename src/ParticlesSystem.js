@@ -75,7 +75,7 @@ export default class
             life.assign(hash(instanceIndex))
         })
         this.particlesInitCompute = particlesInit().compute(this.count)
-        this.renderer.compute(this.particlesInitCompute)
+        this.renderer.computeAsync(this.particlesInitCompute)
 
         // Compute update
         const particlesUpdate = Fn(() =>
@@ -90,7 +90,9 @@ export default class
 
             // Turbulence
             const turbulenceInput = position.mul(this.uniforms.turbulencePositionFrequeny).add(12.34)
-            const turbulence = curlNoise4d(vec4(turbulenceInput, currentTime.mul(this.uniforms.turbulenceTimeFrequeny))).mul(this.uniforms.turbulenceStrength)
+            // Split the parameters to avoid "lessThan() parameter length exceeds limit" error
+            const turbulenceTimeParam = currentTime.mul(this.uniforms.turbulenceTimeFrequeny)
+            const turbulence = curlNoise4d(vec4(turbulenceInput, turbulenceTimeParam)).mul(this.uniforms.turbulenceStrength)
 
             // Update velocity
             velocity.addAssign(turbulence)
@@ -129,7 +131,11 @@ export default class
 
                 // Velocity
                 const newVelocity = mix(this.uniforms.emitterVelocity, this.uniforms.emitterPreviousVelocity, mixStrength)
-                velocity.assign(newVelocity.mul(this.uniforms.emitterVelocityStrength).add(randomDirection.mul(this.uniforms.initialRandomVelocity)).add(this.uniforms.initialVelocity))
+                // Break complex expression into multiple steps
+                const velocityPart1 = newVelocity.mul(this.uniforms.emitterVelocityStrength)
+                const velocityPart2 = randomDirection.mul(this.uniforms.initialRandomVelocity)
+                const velocitySum = velocityPart1.add(velocityPart2)
+                velocity.assign(velocitySum.add(this.uniforms.initialVelocity))
             })
 
             life.assign(newLife.mod(1))
@@ -140,7 +146,11 @@ export default class
         const life = this.lifeBuffer.toAttribute()
         const scaleIn = life.remap(0, this.uniforms.fadeIn, 0, 1)
         const scaleOut = life.remap(this.uniforms.fadeOut.oneMinus(), 1, 1, 0)
-        const scaleFinal = min(scaleIn, scaleOut).smoothstep(0, 1).mul(this.uniforms.size).mul(range(0, 1))
+        // Break down the complex scale calculation
+        const scaleMinimum = min(scaleIn, scaleOut)
+        const scaleSmoothed = scaleMinimum.smoothstep(0, 1)
+        const scaleSized = scaleSmoothed.mul(this.uniforms.size)
+        const scaleFinal = scaleSized.mul(range(0, 1))
         this.material.scaleNode = scaleFinal
 
         // Position
@@ -149,7 +159,14 @@ export default class
             const sparklingTime = hash(instanceIndex.add(uint(Math.random() * 0xffffff)))
 
             const sparklingLife = life.mul(this.uniforms.sparklingFrequency).mod(1)
-            sparkling.assign(select(sparklingLife.lessThan(sparklingTime).and(sparklingLife.greaterThan(sparklingTime.sub(this.uniforms.sparklingDuration.mul(this.uniforms.sparklingFrequency)))), 1, 0))
+            
+            // Split complex expression to avoid lessThan parameter length limit
+            const durationTimesFreq = this.uniforms.sparklingDuration.mul(this.uniforms.sparklingFrequency)
+            const thresholdTime = sparklingTime.sub(durationTimesFreq)
+            const isGreaterThanThreshold = sparklingLife.greaterThan(thresholdTime)
+            const isLessThanTime = sparklingLife.lessThan(sparklingTime)
+            
+            sparkling.assign(select(isLessThanTime.and(isGreaterThanThreshold), 1, 0))
             return this.positionBuffer.toAttribute()
         })()
 
@@ -163,9 +180,12 @@ export default class
             const alphaGlow = this.uniforms.glowSpread.div(distanceToCenter).sub(this.uniforms.glowSpread.mul(2))
             alphaGlow.mulAssign(alphaSolid.oneMinus())
             
-            const alphaFinal = max(alphaGlow, alphaSolid).mul(this.uniforms.opacity)
+            // Break down complex expressions
+            const alphaMixed = max(alphaGlow, alphaSolid)
+            const alphaFinal = alphaMixed.mul(this.uniforms.opacity)
 
-            alphaFinal.mulAssign(sparkling.mul(this.uniforms.sparklingAlpha).add(1))
+            const sparklingEffect = sparkling.mul(this.uniforms.sparklingAlpha).add(1)
+            alphaFinal.mulAssign(sparklingEffect)
 
             const finalColor = mix(this.uniforms.colorIn, this.uniforms.colorOut, life)
             return vec4(finalColor, alphaFinal)
@@ -216,7 +236,7 @@ export default class
         this.uniforms.emitterPosition.value.copy(this.emitterPosition)
 
         // Compute update
-        this.renderer.compute(this.particlesUpdateCompute)
+        this.renderer.computeAsync(this.particlesUpdateCompute)
 
         // Update previous values
         this.uniforms.emitterPreviousPosition.value.copy(this.uniforms.emitterPosition.value)

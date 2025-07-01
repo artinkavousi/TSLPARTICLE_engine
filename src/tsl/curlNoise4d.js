@@ -1,10 +1,10 @@
 // Base on https://al-ro.github.io/projects/embers/
 // Added a 4th dimension
 
-import { cross, float, tslFn, vec3, vec4 } from "three/tsl"
+import { cross, float, Fn, vec3, vec4 } from "three/tsl"
 import { simplexNoise4d } from './simplexNoise4d.js'
 
-const curlNoise4d = tslFn(([ inputA ]) =>
+const curlNoise4d = Fn(([ inputA ]) =>
 {
     const epsilon = float(1e-4) // Because EPSILON doesn't work with high input
 

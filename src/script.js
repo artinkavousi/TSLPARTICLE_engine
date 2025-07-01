@@ -65,6 +65,7 @@ const renderer = new WebGPURenderer({
 renderer.setSize(sizes.width, sizes.height)
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
 renderer.setClearColor('#19191f')
+await renderer.init()
 
 /**
  * Emitter
@@ -75,14 +76,18 @@ emitter.previousPosition = emitter.object.position.clone()
 emitter.velocity = new THREE.Vector3()
 scene.add(emitter.object)
 
-// Controls
-emitter.controls = new TransformControls(camera, renderer.domElement)
-emitter.controls.attach(emitter.object)
-scene.add(emitter.controls)
-emitter.controls.visible = true
-emitter.controls.enabled = emitter.controls.visible
+// Create TransformControls and add to the scene directly
+const transformControls = new TransformControls(camera, renderer.domElement)
+transformControls.attach(emitter.object)
+// scene.add(transformControlsObject)
 
-emitter.controls.addEventListener( 'dragging-changed', (event) =>
+// Create a proxy object for the GUI
+emitter.controls = {
+    visible: true,
+    enabled: true
+}
+
+transformControls.addEventListener( 'dragging-changed', (event) =>
 {
     cameraControls.enabled = !event.value
 })
@@ -144,7 +149,11 @@ particlesGui.add(particlesSystem.uniforms.decayFrequency, 'value', 0, 1, 0.001).
 particlesGui.add(particlesSystem.uniforms.velocityDamping, 'value', 0, 0.1, 0.001).name('velocityDamping')
 
 const emitterGui = particlesGui.addFolder('🔫 Emitter')
-emitterGui.add(emitter.controls, 'enabled').name('emitterVisible').onChange((value) => { emitter.controls.visible = value })
+emitterGui.add(emitter.controls, 'enabled').name('emitterVisible').onChange((value) => { 
+    emitter.controls.visible = value;
+    transformControls.visible = value;
+    transformControls.enabled = value;
+})
 emitterGui.add(particlesSystem.uniforms.emitterRadius, 'value', 0, 1, 0.001).name('emitterRadius')
 emitterGui.add(particlesSystem.uniforms.emitterVelocityStrength, 'value', 0, 1, 0.001).name('emitterVelocityStrength')
 
@@ -217,7 +226,5 @@ const tick = async () =>
     requestAnimationFrame(tick)
 }
 
-// Initialize WebGPU and start the animation loop
-renderer.init().then(() => {
-    tick()
-})
+// Start the animation loop
+tick()

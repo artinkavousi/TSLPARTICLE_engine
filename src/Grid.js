@@ -1,4 +1,4 @@
-import { If, color, tslFn, uniform, vec3, vec4, positionWorld, vec2, normalWorld, mix, max } from 'three/tsl'
+import { If, color, Fn, uniform, vec3, vec4, positionWorld, vec2, normalWorld, mix, max } from 'three/tsl'
 import { MeshBasicNodeMaterial } from 'three/webgpu'
 import * as THREE from 'three'
 
@@ -18,7 +18,7 @@ export default class Grid
         const colorBigUniform = uniform(color('#705df2'))
 
         // Triplanar Uv
-        const triplanarUv = tslFn(([ position, normal ]) =>
+        const triplanarUv = Fn(([ position, normal ]) =>
         {
             const dotX = normal.dot(vec3(1, 0, 0)).abs()
             const dotY = normal.dot(vec3(0, 1, 0)).abs()
@@ -43,7 +43,7 @@ export default class Grid
         })
 
         // Triplanar Grid
-        const triplanarGrid = tslFn(([scale, thickness, offset]) =>
+        const triplanarGrid = Fn(([scale, thickness, offset]) =>
         {
             const uv = triplanarUv(positionWorld, normalWorld).div(scale).add(thickness.mul(0.5)).add(offset).mod(1)
             return max(
@@ -53,7 +53,7 @@ export default class Grid
         })
 
         // Color
-        material.colorNode = tslFn(() =>
+        material.colorNode = Fn(() =>
         {
             // 1/10 grid
             const finalColor = mix(
